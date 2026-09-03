@@ -10,6 +10,11 @@ RUN npm ci --ignore-scripts
 
 COPY tsconfig.json ./
 COPY src/ ./src/
+# The playbook resources are generated from these at build time (see
+# scripts/build-playbook.mjs) rather than duplicated — without them present
+# here, `npm run build` fails before tsc ever runs.
+COPY scripts/ ./scripts/
+COPY skills/ ./skills/
 RUN npm run build
 
 # ─────────────────────────────────────────────
