@@ -69,6 +69,16 @@ check("find_nearest search mode attaches place", x.sc?.source === "search" && x.
 x = await call("geolink_find_nearest", { origin: "30.0444,31.2357" });
 check("find_nearest rejects neither mode", x.r.isError && /exactly one/.test(x.text));
 
+// The upstream is free to echo destinations in its own order; pairing by
+// position rather than coordinate attributes one place another's travel time,
+// and the tell is a road distance shorter than its own straight line.
+x = await call("geolink_find_nearest", { origin: "30.00,31.20", candidates: ["30.20,31.20", "30.10,31.20", "30.02,31.20"], rank_by: "distance", response_format: "json" });
+const sane = (x.sc?.results ?? []).every((r) => r.distance_meters >= r.straight_line_km * 1000 * 0.98);
+check("find_nearest pairs cells to candidates by coordinate", sane && !x.sc?.warning, (x.sc?.results ?? []).map((r) => `${r.label}:${r.distance_meters}m/${(r.straight_line_km*1000).toFixed(0)}m`).join(" "));
+const nearestFirst = x.sc?.results?.[0];
+check("find_nearest ranks the genuinely closest first", nearestFirst && Math.abs(nearestFirst.location.lat - 30.02) < 0.001, `top=${nearestFirst?.label}`);
+
+
 // ---- sweep
 x = await call("geolink_sweep_area", { query: "pharmacy", area: { bounds: { northeast: { lat: 30.10, lng: 31.30 }, southwest: { lat: 30.00, lng: 31.20 } } }, grid_spacing_km: 3, dry_run: true });
 check("sweep dry_run spends zero search calls", x.sc?.dry_run === true && x.sc.plan.grid_points === 16 && x.sc.plan.estimated_api_calls === 16, JSON.stringify(x.sc?.plan));

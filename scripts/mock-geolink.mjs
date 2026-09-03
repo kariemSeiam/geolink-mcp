@@ -55,7 +55,18 @@ createServer((req, res) => {
     const P = (s) => s.split(";").map((x) => x.split(",").map(Number));
     const O = P(q.origins), D = P(q.destinations);
     const matrix = O.map((o) => D.map((d) => { const m = Math.round(Math.hypot(o[0]-d[0], o[1]-d[1]) * 111000 * 1.3) + 100; return { distance_meters: m, distance_text: `${(m/1000).toFixed(2)} km`, duration_seconds: Math.round(m/8), duration_text: `${Math.round(m/8/60)} mins` }; }));
-    return send({ success: true, data: { origins: O.map((c) => ({ coordinates: c, short_name: "", full_address: "" })), destinations: D.map((c) => ({ coordinates: c, short_name: "", full_address: "" })), distance_matrix: matrix, nearest_destination_index: matrix.map((r) => r.reduce((bi, c, i, a) => c.duration_seconds < a[bi].duration_seconds ? i : bi, 0)) } });
+    // An upstream is free to echo destinations in its own order. When asked to,
+    // reverse them together with their columns — the response stays internally
+    // consistent, and any client that pairs by position instead of coordinate
+    // silently attributes each place another place's travel time.
+    let outD = D, outMatrix = matrix;
+    if (q.shuffle === "reverse") {
+      const order = D.map((_, i) => D.length - 1 - i);
+      outD = order.map((i) => D[i]);
+      outMatrix = matrix.map((row) => order.map((i) => row[i]));
+    }
+    const nearestOf = (row, cols) => cols.reduce((bi, _, i) => row[i].duration_seconds < row[bi].duration_seconds ? i : bi, 0);
+    return send({ success: true, data: { origins: O.map((c) => ({ coordinates: c, short_name: "", full_address: "" })), destinations: outD.map((c) => ({ coordinates: c, short_name: "", full_address: "" })), distance_matrix: outMatrix, nearest_destination_index: outMatrix.map((r) => nearestOf(r, outD)) } });
   }
   send({ success: false, error: "Unknown endpoint" }, 404);
 }).listen(port, "127.0.0.1", () => console.error(`mock geolink on ${port}`));

@@ -19,7 +19,7 @@ import {
 } from "../services/resolve.js";
 import { BoundsSchema } from "../services/resolve.js";
 import { MatrixCellSchema, PlaceSchema, ResolvedLocationSchema, RouteEndpointSchema } from "../services/schemas.js";
-import type { MatrixCell, Place, ResolvedLocation, Route } from "../types.js";
+import type { LatLng, MatrixCell, Place, ResolvedLocation, Route } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -353,6 +353,7 @@ Examples:
     location: z.object({ lat: z.number(), lng: z.number() }),
     place: PlaceSchema.optional(),
     straight_line_km: z.number(),
+    unreliable_pairing: z.boolean().optional(),
     distance_meters: z.number(),
     distance_text: z.string(),
     duration_seconds: z.number(),
@@ -367,6 +368,7 @@ Examples:
     rank_by: RankBy,
     candidates_evaluated: z.number().int(),
     results: z.array(RankedSchema),
+    warning: z.string().optional(),
   };
 
   server.registerTool(
@@ -463,17 +465,45 @@ Examples:
       const row: MatrixCell[] = result.matrix[0] ?? [];
       const geolinkNearest = result.nearest_destination_index[0] ?? -1;
 
+      /**
+       * Resolve a candidate to its cell by the coordinates the upstream echoed
+       * back, falling back to position when it echoed nothing usable. Index
+       * order is an assumption about someone else's response shape; the
+       * coordinates are the identity.
+       */
+      const echoed = result.destinations;
+      const cellFor = (index: number, want: LatLng): MatrixCell | undefined => {
+        const byPosition = row[index];
+        const at = echoed[index];
+        if (at && Math.abs(at.lat - want.lat) < 1e-4 && Math.abs(at.lng - want.lng) < 1e-4) return byPosition;
+        const found = echoed.findIndex((d) => d && Math.abs(d.lat - want.lat) < 1e-4 && Math.abs(d.lng - want.lng) < 1e-4);
+        return found >= 0 ? row[found] : byPosition;
+      };
+      let mismatched = 0;
+
       const ranked = candidates
         .map((c, i) => {
-          const cell = row[i] ?? { distance_meters: 0, distance_text: "", duration_seconds: 0, duration_text: "" };
+          // Pair by coordinate, not by position. The upstream echoes the
+          // destinations it routed; nothing guarantees it echoes them in the
+          // order they were sent, and trusting position silently attributes
+          // one place's travel time to another. When the order does match this
+          // resolves to the same cell.
+          const cell = cellFor(i, toLatLng(c)) ?? { distance_meters: 0, distance_text: "", duration_seconds: 0, duration_text: "" };
           const place = places[i];
+          const straightLineKm = round(haversineKm(origin, c), 3);
+          // A road route cannot be shorter than the straight line between its
+          // own endpoints. If it is, this cell belongs to a different place,
+          // and reporting it would answer the question with the wrong branch.
+          const impossible = cell.distance_meters > 0 && straightLineKm > 0 && cell.distance_meters < straightLineKm * 1000 * 0.98;
+          if (impossible) mismatched += 1;
           return {
             candidate_index: i,
             label: c.label,
             location: toLatLng(c),
             ...(place ? { place } : {}),
-            straight_line_km: round(haversineKm(origin, c), 3),
+            straight_line_km: straightLineKm,
             ...cell,
+            ...(impossible ? { unreliable_pairing: true } : {}),
             is_geolink_nearest: i === geolinkNearest,
           };
         })
@@ -493,6 +523,11 @@ Examples:
         rank_by: args.rank_by,
         candidates_evaluated: candidates.length,
         results: ranked,
+        ...(mismatched > 0
+          ? {
+              warning: `${mismatched} candidate(s) came back with a road distance shorter than their own straight-line distance, which is not physically possible and means the upstream's cells could not be matched to these places reliably. Those entries carry unreliable_pairing; treat their ranking as unverified and re-check with geolink_get_directions for the specific pair.`,
+            }
+          : {}),
       };
 
       const text =
