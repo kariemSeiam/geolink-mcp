@@ -44,7 +44,7 @@ of changing it.
 | 3 | **Budget** — what will this cost in calls and seconds? | a quoted plan | an unquoted sweep |
 | 4 | **Retrieve** — search, sweep, route, or matrix | raw results + their stats | — |
 | 5 | **Completeness** — is this everything, or everything you asked for? | a saturation and edge verdict | a total reported as a total when it is a floor |
-| 6 | **Tripwires** — run all ten | pass/fix list | any tripwire |
+| 6 | **Tripwires** — run all eleven | pass/fix list | any tripwire |
 | 7 | **Answer** — with its confidence and what it excludes | the deliverable | — |
 
 Gate 5 and Gate 6 are not formalities. They are where every error listed above
@@ -137,7 +137,7 @@ found everything.
 
 ## Gate 6 — Tripwires
 
-Run every tripwire in [tripwires.md](references/tripwires.md). Ten failure modes,
+Run every tripwire in [tripwires.md](references/tripwires.md). Eleven failure modes,
 each with what happened, the check, and what passing looks like.
 
 Do not summarise them from memory — open the file. Recalling "something about

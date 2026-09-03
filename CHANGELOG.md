@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.4.0] - 2026-09-03
+
+### Fixed
+- `geolink_find_nearest` and `geolink_distance_matrix` were ranking against travel times that belonged to other places. The cause was upstream — the matrix collected concurrent per-pair requests in completion order while echoing destinations in the order they were sent — and is fixed in the API; the tools now also verify it rather than trusting it.
+
+### Added
+- Results that claim to be distances are checked against a physical invariant: a road route cannot be shorter than the straight line between its own endpoints. Failures are marked `unreliable_pairing` and summarised in a `warning`, so a ranking built on a mismatched cell announces itself instead of looking correct.
+- Candidates are matched to matrix cells by the coordinates the upstream echoes back rather than by position, so a reordered response is realigned instead of misread.
+- Tripwire 9 in the skill records the incident, and the mock can now echo destinations out of order so the regression is covered offline.
+
 ## [1.3.0] - 2026-09-03
 
 ### Added
