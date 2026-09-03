@@ -22,6 +22,7 @@ import {
   haversineKm,
   inBounds,
   mapWithConcurrency,
+  round,
   suggestSpacingKm,
   type GridOptions
 } from "../services/geo.js";
@@ -132,6 +133,7 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
     raw_results: z.number().int(),
     after_clip: z.number().int(),
     unique_results: z.number().int(),
+    saturated_points: z.number().int(),
     by_governorate: z.record(z.number().int()),
     by_district: z.record(z.number().int()),
     failed_details: z.array(z.object({
@@ -164,6 +166,19 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
       sample_points: z.array(LatLngSchema),
     }),
     stats: StatsSchema.optional(),
+    completeness: z
+      .object({
+        saturated_points: z.number().int(),
+        saturation_ratio: z.number(),
+        saturated: z.boolean(),
+        overlap_ratio: z.number(),
+        tiles_isolated: z.boolean(),
+        edges_checked: z.boolean(),
+        verdict: z.enum(["bounded", "floor", "gaps_likely"]),
+        notes: z.array(z.string()),
+        remaining_check: z.string(),
+      })
+      .optional(),
     ...PaginationFields,
     places: z.array(PlaceSchema.partial().extend({ location: LatLngSchema.optional() })).optional(),
     geojson: z
@@ -397,9 +412,58 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
         raw_results: rawPlaces.length,
         after_clip: clipped.length,
         unique_results: unique.length,
+        saturated_points: 0,
         by_governorate: byGov,
         by_district: byDistrict,
         failed_details: failures.length > 0 ? failures : undefined,
+      };
+
+      // The completeness receipt. A sweep claims the tiles are mutually
+      // exclusive after de-duplication and collectively exhaustive over the
+      // bounds; these are the numbers that say whether the claim holds, and
+      // computing them here means a caller is told rather than left to derive
+      // it from stats they may not think to divide.
+      //
+      // Saturation is counted per point, never averaged. An average is the one
+      // shape that hides the case that matters: five downtown cells returning
+      // their maximum while 195 rural cells return nothing averages to a number
+      // that looks healthy, and the five saturated cells are exactly where the
+      // missing places are. Only this side has the per-point counts.
+      const saturatedPoints = perPoint.filter((rows) => rows.length >= args.results_per_point).length;
+      const saturationRatio = round(saturatedPoints / Math.max(1, points.length), 3);
+      const overlapRatio = round(rawPlaces.length / Math.max(1, unique.length), 2);
+      const saturated = saturatedPoints > 0;
+      const tilesIsolated = overlapRatio < 1.15;
+      const notes: string[] = [];
+      if (saturated) {
+        notes.push(
+          `${saturatedPoints} of ${points.length} grid point(s) returned the full ${args.results_per_point} they were allowed and had more to give. The total is a floor: report it as "at least". Raise results_per_point, or sweep those cells again at tighter spacing.`,
+        );
+      }
+      if (tilesIsolated) {
+        notes.push(
+          `Neighbouring tiles barely saw the same places (overlap ${overlapRatio}). Ground between the query points may belong to no tile's reach. Tighten grid_spacing_km.`,
+        );
+      }
+      if (failed > 0) {
+        notes.push(`${failed} grid point(s) returned nothing due to an error; that ground is absent from these results. See stats.failed_details.`);
+      }
+      if (overlapRatio > 4) {
+        notes.push(`Tiles overlap heavily (${overlapRatio}). Coverage is safe but calls are being spent re-reading the same places; a wider grid_spacing_km would cost less.`);
+      }
+      stats.saturated_points = saturatedPoints;
+
+      const completeness = {
+        saturated_points: saturatedPoints,
+        saturation_ratio: saturationRatio,
+        saturated,
+        overlap_ratio: overlapRatio,
+        tiles_isolated: tilesIsolated,
+        edges_checked: false,
+        verdict: saturated ? ("floor" as const) : tilesIsolated || failed > 0 ? ("gaps_likely" as const) : ("bounded" as const),
+        notes,
+        remaining_check:
+          "Edges are not verifiable from inside a sweep: reverse-geocode the four corners and centre of area.bounds, and treat any district found there but absent from stats.by_district as ground the grid stopped short of.",
       };
 
       const page = paginate(unique, args.limit, args.offset);
@@ -411,6 +475,7 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
         area: areaOut,
         plan,
         stats,
+        completeness,
         total: page.total,
         count: page.count,
         offset: page.offset,
@@ -419,10 +484,21 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
       };
 
       if (args.response_format === "geojson") {
-        const fc = placesToGeoJson(page.items);
-        const structured = { ...base, geojson: fc };
-        const text = JSON.stringify(structured, null, 2);
-        return ok(structured, text.length > 25_000 ? `${text.slice(0, 24_000)}\n…(truncated; lower limit or use fields)` : text);
+        // Fit by dropping whole features, never by slicing the string: a hard
+        // character cut produces text that parses as nothing at all, which is
+        // a worse failure than returning fewer features and saying so.
+        const fitted = fitToLimit(
+          page.items,
+          (items) => JSON.stringify({ ...base, geojson: placesToGeoJson(items) }, null, 2),
+          `Use a smaller limit, offset=${args.offset}, or fields=["name","location"].`,
+        );
+        const structured = {
+          ...base,
+          geojson: placesToGeoJson(fitted.items),
+          count: fitted.items.length,
+          ...(fitted.truncated ? { truncated: true, truncation_message: fitted.truncation_message } : {}),
+        };
+        return ok(structured, fitted.text);
       }
 
       const render = (items: Partial<Place>[]): string => {
@@ -431,6 +507,7 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
           `# Sweep: "${args.query}" over ${label}`,
           `_${stats.unique_results} unique places from ${stats.raw_results} raw hits across ${stats.points_queried} grid points (${stats.api_calls_made} API calls${failed ? `, ${failed} failed` : ""})_`,
           "",
+          `**Completeness**: ${completeness.verdict}${completeness.notes.length ? ` — ${completeness.notes[0]}` : ""}`,
           `**By governorate**: ${Object.entries(byGov).map(([k, v]) => `${k || "(unknown)"} ${v}`).join(" · ") || "n/a"}`,
           `**Top districts**: ${Object.entries(byDistrict).slice(0, 10).map(([k, v]) => `${k || "(unknown)"} ${v}`).join(" · ") || "n/a"}`,
           "",
