@@ -35,7 +35,7 @@ of changing it.
 | 3 | **Budget** — what will this cost in calls and seconds? | a quoted plan | an unquoted sweep |
 | 4 | **Retrieve** — search, sweep, route, or matrix | raw results + their stats | — |
 | 5 | **Completeness** — is this everything, or everything you asked for? | a saturation and edge verdict | a total reported as a total when it is a floor |
-| 6 | **Tripwires** — run all ten | pass/fix list | any tripwire |
+| 6 | **Tripwires** — run all eleven | pass/fix list | any tripwire |
 | 7 | **Answer** — with its confidence and what it excludes | the deliverable | — |
 
 Gate 5 and Gate 6 are not formalities. They are where every error listed above
@@ -128,7 +128,7 @@ found everything.
 
 ## Gate 6 — Tripwires
 
-Run every tripwire in [tripwires.md](references/tripwires.md). Ten failure modes,
+Run every tripwire in [tripwires.md](references/tripwires.md). Eleven failure modes,
 each with what happened, the check, and what passing looks like.
 
 Do not summarise them from memory — open the file. Recalling "something about
@@ -390,7 +390,7 @@ to do, but the boundary should stay visible in the answer: what came from the
 map, and what came from elsewhere.
 `;
 
-export const PLAYBOOK_TRIPWIRES = `# Tripwires — the ten ways map work returns a confident wrong answer
+export const PLAYBOOK_TRIPWIRES = `# Tripwires — the eleven ways map work returns a confident wrong answer
 
 Every one of these was hit for real against this API, most of them in a single
 week of building on it. None are exotic. They are the normal failure modes of
@@ -400,7 +400,7 @@ The common shape: **the response looks successful.** There is no error, no
 warning, no empty field. A wrong coverage number and a right one are the same
 JSON. That is what makes a checklist necessary — nothing here announces itself.
 
-Run all ten at the verification gate. Open this file; do not recall it from memory.
+Run all eleven at the verification gate. Open this file; do not recall it from memory.
 
 ---
 
@@ -583,7 +583,37 @@ ratio is surfaced rather than smoothed over.
 
 ---
 
-## 9. A cache keyed on less than the request
+## 9. Concurrency that keeps the index and loses the order
+
+**What happened.** The distance matrix ran one request per origin-destination
+pair in a thread pool and collected them with \`as_completed\`, which yields
+futures as they finish rather than as they were submitted. The pair index was
+recovered correctly from the future and then discarded: each result was appended
+to its row, so every destination's travel time landed in whichever column its
+request happened to return in. Meanwhile the destination list echoed back to the
+caller was built by walking the destinations that were sent, so it was always in
+the right order. The two halves of the response disagreed, and
+\`nearest_destination_index\` pointed into the scrambled half — so "which of these
+is closest" returned a real place chosen at random.
+
+**Why here.** Nothing about the response looked wrong. It was well-formed, fully
+populated, internally plausible, and every number in it was a genuine
+measurement of something — just of the wrong pair. It only appears with more
+than one destination, so every single-destination test passed.
+
+**The check.** Assert a physical invariant on results that claim to be
+distances: a road route cannot be shorter than the straight line between its own
+endpoints. It costs nothing, it is not a heuristic, and it is what surfaced this
+— one destination measured 5184 m alone and 2759 m inside a four-destination
+call. Where a result can be obtained two ways, obtain it both ways once and
+compare; agreement between an isolated call and a batched one is the cheapest
+proof that a batch preserves identity.
+
+**Passes when:** every distance in a batched result is at least the straight-line
+distance for its own pair, and a spot-checked entry matches the same query made
+alone.
+
+## 10. A cache keyed on less than the request
 
 **What happened.** Twice, in two different codebases, the same bug: a search
 cache keyed on query, location and language — but not on how many results were
@@ -603,7 +633,7 @@ same-query-different-depth pair has been tested for correct behaviour.
 
 ---
 
-## 10. Silence read as completion
+## 11. Silence read as completion
 
 **What happened.** A crawl stopped when a page contributed nothing new, treating
 that as "the source is exhausted". Combined with tripwire 1, a transient short
