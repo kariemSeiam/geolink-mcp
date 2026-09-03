@@ -22,6 +22,12 @@ export interface Config {
   transport: Transport;
   host: string;
   port: number;
+  /**
+   * The origin clients reach this server on, when it cannot be inferred.
+   * Every URL in the OAuth metadata has to match the host a client actually
+   * used, and behind a proxy the request's own host is the internal one.
+   */
+  publicUrl: string;
 }
 
 function intEnv(name: string, fallback: number, min: number, max: number): number {
@@ -41,7 +47,12 @@ function strEnv(name: string, fallback: string): string {
 
 export function loadConfig(): Config {
   const apiKey = strEnv("GEOLINK_API_KEY", "");
-  if (!apiKey) {
+  const transportEarly = strEnv("TRANSPORT", "stdio").toLowerCase();
+  // Over stdio the key comes from the environment, as the spec intends for a
+  // local process. Over HTTP each connection brings its own key through the
+  // authorization flow, so requiring one here would block a correctly
+  // configured multi-user deployment from starting.
+  if (!apiKey && transportEarly !== "http" && transportEarly !== "streamable-http") {
     throw new Error(
       "GEOLINK_API_KEY is required. Get a free key at https://geolink-eg.com/register and set it as an environment variable.",
     );
@@ -71,5 +82,6 @@ export function loadConfig(): Config {
     transport: transportRaw,
     host: strEnv("HOST", "127.0.0.1"),
     port: intEnv("PORT", 3000, 1, 65_535),
+    publicUrl: strEnv("GEOLINK_PUBLIC_URL", "").replace(/\/+$/, ""),
   };
 }
