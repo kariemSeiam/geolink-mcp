@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: local('JetBrains Mono'), local('Space Mono');
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1200px;
+    height: 630px;
+    background: rgb(11 11 14);
+    overflow: hidden;
+    font-family: "JetBrains Mono", "Space Mono", ui-monospace, monospace;
+  }
+  .canvas {
+    position: relative;
+    width: 1200px;
+    height: 630px;
+    background:
+      radial-gradient(ellipse 900px 500px at 15% 15%, rgba(255,90,54,0.10), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 90% 85%, rgba(6,182,212,0.10), transparent 60%),
+      rgb(11 11 14);
+    color: rgb(245 240 232);
+  }
+  /* faint grid */
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(245,240,232,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(245,240,232,0.035) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(ellipse 900px 600px at 50% 45%, black 40%, transparent 90%);
+  }
+  /* doodles — same vocabulary as me.kariem.dev hero: thin round strokes, currentColor */
+  .doodle { position: absolute; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: 0.55; }
+  .d1 { top: 68px; left: 60px; width: 90px; color: rgb(255 144 90); opacity: 0.5; }
+  .d2 { top: 150px; right: 90px; width: 60px; color: rgb(52 211 238); opacity: 0.45; }
+  .d3 { bottom: 64px; left: 90px; width: 110px; color: rgb(251 191 36); opacity: 0.4; }
+  .d4 { bottom: 100px; right: 70px; width: 34px; color: rgb(255 144 90); opacity: 0.5; }
+  .d5 { top: 260px; left: 40px; width: 30px; color: rgb(52 211 238); opacity: 0.35; }
+
+  .content {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 88px;
+  }
+
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 30px;
+  }
+  .eyebrow-text {
+    font-size: 15px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: rgb(180 175 165);
+    font-weight: 500;
+  }
+  .eyebrow-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgb(255 144 90);
+    box-shadow: 0 0 12px rgba(255,144,90,0.8);
+  }
+
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 26px;
+    margin-bottom: 22px;
+  }
+
+  .mark {
+    width: 84px;
+    height: 84px;
+    flex-shrink: 0;
+  }
+
+  h1 {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 68px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: rgb(250 248 244);
+    line-height: 1;
+  }
+  h1 .dim { color: rgb(140 135 128); font-weight: 500; }
+
+  .tagline {
+    font-size: 24px;
+    color: rgb(196 190 180);
+    font-weight: 400;
+    max-width: 900px;
+    line-height: 1.5;
+    margin-bottom: 40px;
+    letter-spacing: -0.005em;
+  }
+  .tagline b { color: rgb(255 168 128); font-weight: 600; }
+  .tagline .cy { color: rgb(103 224 240); font-weight: 600; }
+
+  .tools-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(245,240,232,0.14);
+    background: rgba(245,240,232,0.035);
+    font-size: 15px;
+    color: rgb(210 205 196);
+    letter-spacing: -0.01em;
+  }
+  .chip .ic { font-size: 16px; line-height: 1; }
+
+  .footer-row {
+    position: absolute;
+    bottom: 44px;
+    left: 88px;
+    right: 88px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .repo-path {
+    font-size: 17px;
+    color: rgb(150 145 138);
+    letter-spacing: -0.01em;
+  }
+  .repo-path .slash { color: rgb(90 87 82); }
+  .repo-path .owner { color: rgb(150 145 138); }
+  .repo-path .name { color: rgb(255 168 128); font-weight: 600; }
+
+  .badges {
+    display: flex;
+    gap: 10px;
+  }
+  .badge {
+    font-size: 13px;
+    padding: 6px 13px;
+    border-radius: 6px;
+    letter-spacing: 0.02em;
+    font-weight: 600;
+  }
+  .badge-mcp { background: rgba(110,86,207,0.18); color: rgb(178 158 240); border: 1px solid rgba(110,86,207,0.4); }
+  .badge-ts { background: rgba(49,120,198,0.18); color: rgb(120 180 235); border: 1px solid rgba(49,120,198,0.4); }
+  .badge-mit { background: rgba(245,240,232,0.06); color: rgb(160 155 148); border: 1px solid rgba(245,240,232,0.14); }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <div class="grid"></div>
+
+  <!-- doodles: wave, arrow-down, crescent-ish, small arrow -->
+  <svg class="doodle d1" viewBox="0 0 90 20"><path d="M2 10 Q13 2 24 10 T46 10 T68 10 T88 10"/></svg>
+  <svg class="doodle d2" viewBox="0 0 24 40"><path d="M12 2 L12 34"/><path d="M4 26 L12 34 L20 26"/></svg>
+  <svg class="doodle d3" viewBox="0 0 110 24"><path d="M2 12 Q28 -4 55 12 T108 12"/></svg>
+  <svg class="doodle d4" viewBox="0 0 34 14"><path d="M2 7 L30 7"/><path d="M24 2 L30 7 L24 12"/></svg>
+  <svg class="doodle d5" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="12" r="3"/></svg>
+
+  <div class="content">
+    <div class="eyebrow">
+      <span class="eyebrow-dot"></span>
+      <span class="eyebrow-text">Model Context Protocol Server</span>
+    </div>
+
+    <div class="title-row">
+      <svg class="mark" viewBox="0 0 64 64" fill="none">
+        <g>
+          <path d="M32.00 3.20 L35.24 23.99 L32.00 32.00 Z" fill="rgb(255 168 128)"/>
+          <path d="M32.00 3.20 L28.76 23.99 L32.00 32.00 Z" fill="rgb(180 106 60)"/>
+          <path d="M41.84 22.16 L35.84 30.37 L32.00 32.00 Z" fill="rgb(255 168 128)"/>
+          <path d="M41.84 22.16 L33.63 28.16 L32.00 32.00 Z" fill="rgb(180 106 60)"/>
+          <path d="M56.00 32.00 L38.68 34.70 L32.00 32.00 Z" fill="rgb(103 224 240)"/>
+          <path d="M56.00 32.00 L38.68 29.30 L32.00 32.00 Z" fill="rgb(45 130 145)"/>
+          <path d="M41.84 41.84 L33.63 35.84 L32.00 32.00 Z" fill="rgb(255 168 128)"/>
+          <path d="M41.84 41.84 L35.84 33.63 L32.00 32.00 Z" fill="rgb(180 106 60)"/>
+          <path d="M32.00 56.00 L29.30 38.68 L32.00 32.00 Z" fill="rgb(103 224 240)"/>
+          <path d="M32.00 56.00 L34.70 38.68 L32.00 32.00 Z" fill="rgb(45 130 145)"/>
+          <path d="M22.16 41.84 L28.16 33.63 L32.00 32.00 Z" fill="rgb(255 168 128)"/>
+          <path d="M22.16 41.84 L30.37 35.84 L32.00 32.00 Z" fill="rgb(180 106 60)"/>
+          <path d="M8.00 32.00 L25.32 29.30 L32.00 32.00 Z" fill="rgb(103 224 240)"/>
+          <path d="M8.00 32.00 L25.32 34.70 L32.00 32.00 Z" fill="rgb(45 130 145)"/>
+          <path d="M22.16 22.16 L30.37 28.16 L32.00 32.00 Z" fill="rgb(255 168 128)"/>
+          <path d="M22.16 22.16 L28.16 30.37 L32.00 32.00 Z" fill="rgb(180 106 60)"/>
+          <circle cx="32" cy="32" r="4.5" fill="rgb(11 11 14)" stroke="rgb(245 240 232)" stroke-width="1.4"/>
+        </g>
+      </svg>
+      <h1>GeoLink<span class="dim">/mcp</span></h1>
+    </div>
+
+    <div class="tagline">
+      Geocoding, place search, routing, and grid-based area sweeps for AI agents.
+      <b>Real road-time</b> ranking, not straight lines. <span class="cy">Dry-run</span> cost preview before every sweep.
+    </div>
+
+    <div class="tools-row">
+      <div class="chip"><span class="ic">🔎</span> geocode</div>
+      <div class="chip"><span class="ic">📍</span> reverse</div>
+      <div class="chip"><span class="ic">🗺️</span> search</div>
+      <div class="chip"><span class="ic">🛣️</span> directions</div>
+      <div class="chip"><span class="ic">🧮</span> matrix</div>
+      <div class="chip"><span class="ic">🎯</span> nearest</div>
+      <div class="chip"><span class="ic">🕸️</span> sweep</div>
+    </div>
+  </div>
+
+  <div class="footer-row">
+    <div class="repo-path"><span class="owner">github.com/kariemSeiam</span><span class="slash">/</span><span class="name">geolink-mcp</span></div>
+    <div class="badges">
+      <span class="badge badge-mcp">MCP</span>
+      <span class="badge badge-ts">TypeScript</span>
+      <span class="badge badge-mit">MIT</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>
