@@ -1,5 +1,7 @@
 <div align="center">
 
+![GeoLink MCP](assets/og-image.png)
+
 # 🧭 GeoLink MCP
 
 ### Turn any AI agent into a location expert — geocoding, search, routing, and full-area sweeps over the Model Context Protocol
