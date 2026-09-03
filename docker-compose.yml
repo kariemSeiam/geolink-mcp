@@ -9,6 +9,10 @@ services:
       - TRANSPORT=http
       - PORT=3010
       - HOST=0.0.0.0
+      # Set per environment - dev.geolink-eg.com on the dev host, geolink-eg.com
+      # on main. Every URL in the served OAuth metadata is built from this; get
+      # it wrong and the metadata advertises a host no client can reach.
+      - GEOLINK_PUBLIC_URL=${GEOLINK_PUBLIC_URL:?set to https://dev.geolink-eg.com or https://geolink-eg.com}
     ports:
       - "127.0.0.1:3010:3010"
     healthcheck:
