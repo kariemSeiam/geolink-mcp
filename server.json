@@ -1,0 +1,49 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-16/server.schema.json",
+  "name": "io.github.kariemseiam/geolink-mcp-server",
+  "description": "Egypt-native geocoding, place search, directions, distance matrix, nearest-by-road-time ranking, and grid-based area coverage sweeps — GeoLink for AI agents.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/kariemSeiam/geolink-mcp-server",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "geolink-mcp-server",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GEOLINK_API_KEY",
+          "description": "GeoLink API key — free tier at https://geolink-eg.com/register",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "GEOLINK_BASE_URL",
+          "description": "Override upstream base URL (staging/mocks)",
+          "isRequired": false,
+          "default": "https://www.geolink-eg.com"
+        },
+        {
+          "name": "GEOLINK_DEFAULT_LANGUAGE",
+          "description": "Default response language",
+          "isRequired": false,
+          "default": "ar"
+        },
+        {
+          "name": "GEOLINK_DEFAULT_COUNTRY",
+          "description": "Default country bias",
+          "isRequired": false,
+          "default": "eg"
+        }
+      ]
+    }
+  ],
+  "remotes": []
+}

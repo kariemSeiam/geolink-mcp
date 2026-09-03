@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GeoLink API support
+    url: https://geolink-eg.com
+    about: Questions about the underlying GeoLink API (keys, quotas, coverage) belong there, not here.
+  - name: MCP specification
+    url: https://modelcontextprotocol.io
+    about: Questions about the Model Context Protocol itself.
