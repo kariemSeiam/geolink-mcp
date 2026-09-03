@@ -1,7 +1,7 @@
 services:
   geolink-mcp:
     build: .
-    image: geolink-mcp-server:latest
+    image: geolink-mcp:latest
     container_name: geolink-mcp
     restart: unless-stopped
     env_file: .env

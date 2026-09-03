@@ -8,7 +8,7 @@ Only the latest published version on npm / `main` branch receives security fixes
 
 Do **not** open a public GitHub issue for security reports.
 
-Instead, use [GitHub Security Advisories](https://github.com/kariemSeiam/geolink-mcp-server/security/advisories/new)
+Instead, use [GitHub Security Advisories](https://github.com/kariemSeiam/geolink-mcp/security/advisories/new)
 for this repository, or email the maintainer directly (see the GitHub profile
 [@kariemSeiam](https://github.com/kariemSeiam)).
 

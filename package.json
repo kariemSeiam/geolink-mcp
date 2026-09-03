@@ -1,11 +1,11 @@
 {
-  "name": "geolink-mcp-server",
-  "version": "1.0.1",
+  "name": "geolink-mcp",
+  "version": "1.0.2",
   "description": "MCP server for GeoLink (geolink-eg.com) \u2014 geocoding, place search, routing, distance matrix, nearest-branch ranking, and grid-based area coverage sweeps for AI agents.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "geolink-mcp-server": "dist/index.js"
+    "geolink-mcp": "dist/index.js"
   },
   "files": [
     "dist",
@@ -38,13 +38,13 @@
   ],
   "license": "MIT",
   "author": "Kariem Seiam",
-  "homepage": "https://github.com/kariemSeiam/geolink-mcp-server#readme",
+  "homepage": "https://github.com/kariemSeiam/geolink-mcp#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kariemSeiam/geolink-mcp-server.git"
+    "url": "git+https://github.com/kariemSeiam/geolink-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/kariemSeiam/geolink-mcp-server/issues"
+    "url": "https://github.com/kariemSeiam/geolink-mcp/issues"
   },
   "engines": {
     "node": ">=18"

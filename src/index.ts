@@ -30,8 +30,8 @@ import { registerSweepTool } from "./tools/sweep.js";
 const HELP = `${SERVER_NAME} v${SERVER_VERSION}
 
 Usage:
-  geolink-mcp-server            run over stdio (default)
-  TRANSPORT=http geolink-mcp-server   run Streamable HTTP on HOST:PORT (/mcp)
+  geolink-mcp            run over stdio (default)
+  TRANSPORT=http geolink-mcp   run Streamable HTTP on HOST:PORT (/mcp)
 
 Environment:
   GEOLINK_API_KEY              required — https://geolink-eg.com/register

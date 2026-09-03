@@ -1,5 +1,5 @@
-export const SERVER_NAME = "geolink-mcp-server";
-export const SERVER_VERSION = "1.0.1";
+export const SERVER_NAME = "geolink-mcp";
+export const SERVER_VERSION = "1.0.2";
 
 export const DEFAULT_BASE_URL = "https://www.geolink-eg.com";
 export const DEFAULT_LANGUAGE = "en";

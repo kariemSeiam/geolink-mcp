@@ -10,26 +10,26 @@ startCommand:
         description: GeoLink API key (free tier — https://geolink-eg.com/register)
       defaultLanguage:
         type: string
-        default: ar
-        description: Default response language (ar or en)
+        default: en
+        description: Default response language (any language GeoLink supports, e.g. en or ar)
       defaultCountry:
         type: string
-        default: eg
-        description: Default country bias for geocoding/search
+        default: ""
+        description: Optional default country bias for geocoding/search (unset = none)
   commandFunction: |
     (config) => ({
       command: "npx",
-      args: ["-y", "geolink-mcp-server"],
+      args: ["-y", "geolink-mcp"],
       env: {
         GEOLINK_API_KEY: config.geolinkApiKey,
-        GEOLINK_DEFAULT_LANGUAGE: config.defaultLanguage || "ar",
-        GEOLINK_DEFAULT_COUNTRY: config.defaultCountry || "eg"
+        GEOLINK_DEFAULT_LANGUAGE: config.defaultLanguage || "en",
+        GEOLINK_DEFAULT_COUNTRY: config.defaultCountry || ""
       }
     })
   exampleConfig:
     geolinkApiKey: your_api_key_here
-    defaultLanguage: ar
-    defaultCountry: eg
+    defaultLanguage: en
+    defaultCountry: ""
 build:
   dockerfile: Dockerfile
   dockerBuildPath: .

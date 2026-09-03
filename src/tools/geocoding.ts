@@ -34,14 +34,14 @@ export function registerGeocodingTools(server: McpServer, ctx: ToolContext): voi
     "geolink_geocode",
     {
       title: "Geocode an address",
-      description: `Convert an address or place name into coordinates, with structured Egyptian address parts (district, governorate, country) and a viewport bounding box.
+      description: `Convert an address or place name into coordinates, with structured address parts (district, governorate, country) and a viewport bounding box.
 
 Returns exactly one best match. For a ranked list of candidates use geolink_search_places instead.
 
 Args:
   - query (string): Address or place name. Arabic and English both work.
-  - language ('ar' | 'en' | ...): Result language. Default: server default ("ar").
-  - country (2-letter): Country focus. Default: server default ("eg").
+  - language ('ar' | 'en' | ...): Result language. Default: server default ("en").
+  - country (2-letter, optional): Country focus. Default: server default (none — no bias).
   - response_format ('markdown' | 'json'): Text rendering. Default: markdown.
 
 Returns (structuredContent):
@@ -90,12 +90,12 @@ Errors: not_found if nothing matches — try adding the district/governorate or 
     "geolink_reverse_geocode",
     {
       title: "Reverse geocode coordinates",
-      description: `Convert latitude/longitude into a human-readable address with structured Egyptian address parts (district, governorate, country) and a viewport bounding box.
+      description: `Convert latitude/longitude into a human-readable address with structured address parts (district, governorate, country) and a viewport bounding box.
 
 Args:
   - latitude (number), longitude (number): The point to describe.
-  - language ('ar' | 'en' | ...): Result language. Default: server default ("ar").
-  - country (2-letter): Country focus. Default: server default ("eg").
+  - language ('ar' | 'en' | ...): Result language. Default: server default ("en").
+  - country (2-letter, optional): Country focus. Default: server default (none — no bias).
   - response_format ('markdown' | 'json'): Text rendering. Default: markdown.
 
 Returns (structuredContent): same Place shape as geolink_geocode:
