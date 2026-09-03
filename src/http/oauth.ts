@@ -19,7 +19,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomToken, safeCompare, verifyPkceS256, type AuthStore } from "./auth.js";
 
-export const MCP_PATH = "/mcp";
+/**
+ * Where this server is mounted on its host.
+ *
+ * It can live on its own subdomain, or share a domain with the main site. The
+ * second case is why the authorization endpoints hang off this prefix rather
+ * than the root: the site already owns /register, and an OAuth registration
+ * endpoint there would either shadow the sign-up page or be shadowed by it.
+ *
+ * The two well-known documents stay at the root regardless, because RFC 9728
+ * and RFC 8414 place them there and a client will not look anywhere else.
+ * Neither path collides with anything the site serves.
+ */
+export const MCP_PATH = (process.env.GEOLINK_MCP_PATH ?? "/mcp").replace(/\/+$/, "") || "/mcp";
 export const SCOPE = "geo:read";
 
 /** Protocol revisions this server will accept on MCP-Protocol-Version. */
@@ -75,10 +87,10 @@ export function protectedResourceMetadata(ctx: OAuthContext): object {
 export function authorizationServerMetadata(ctx: OAuthContext): object {
   return {
     issuer: ctx.issuer,
-    authorization_endpoint: `${ctx.issuer}/authorize`,
-    token_endpoint: `${ctx.issuer}/token`,
-    registration_endpoint: `${ctx.issuer}/register`,
-    revocation_endpoint: `${ctx.issuer}/revoke`,
+    authorization_endpoint: `${ctx.issuer}${MCP_PATH}/authorize`,
+    token_endpoint: `${ctx.issuer}${MCP_PATH}/token`,
+    registration_endpoint: `${ctx.issuer}${MCP_PATH}/register`,
+    revocation_endpoint: `${ctx.issuer}${MCP_PATH}/revoke`,
     scopes_supported: [SCOPE, "offline_access"],
     response_types_supported: ["code"],
     response_modes_supported: ["query"],

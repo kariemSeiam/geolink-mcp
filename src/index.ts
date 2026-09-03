@@ -354,19 +354,19 @@ async function runHttp(cfg: Config): Promise<void> {
       sendJson(res, 200, authorizationServerMetadata(oauth));
       return;
     }
-    if (url.pathname === "/register" && req.method === "POST") {
+    if (url.pathname === `${MCP_PATH}/register` && req.method === "POST") {
       await handleRegister(req, res, oauth);
       return;
     }
-    if (url.pathname === "/authorize") {
+    if (url.pathname === `${MCP_PATH}/authorize`) {
       await handleAuthorize(req, res, oauth, url);
       return;
     }
-    if (url.pathname === "/token" && req.method === "POST") {
+    if (url.pathname === `${MCP_PATH}/token` && req.method === "POST") {
       await handleToken(req, res, oauth);
       return;
     }
-    if (url.pathname === "/revoke" && req.method === "POST") {
+    if (url.pathname === `${MCP_PATH}/revoke` && req.method === "POST") {
       const form = new URLSearchParams(await readBody(req).catch(() => ""));
       authStore.revoke(form.get("token") ?? "");
       // RFC 7009: an unknown token is still a success.
@@ -374,7 +374,7 @@ async function runHttp(cfg: Config): Promise<void> {
       return;
     }
 
-    if (url.pathname !== "/mcp") { res.writeHead(404).end(); return; }
+    if (url.pathname !== MCP_PATH) { res.writeHead(404).end(); return; }
 
     // --- GET: open SSE stream for existing session, or return server info ---
     if (req.method === "GET") {
@@ -386,7 +386,7 @@ async function runHttp(cfg: Config): Promise<void> {
           server: SERVER_NAME,
           version: SERVER_VERSION,
           transport: "streamable-http",
-          endpoint: `https://${req.headers.host}/mcp`,
+          endpoint: `${resolveIssuer(req, cfg.publicUrl)}${MCP_PATH}`,
           protocol: SUPPORTED_PROTOCOL_VERSIONS[SUPPORTED_PROTOCOL_VERSIONS.length - 1],
         }));
         return;
