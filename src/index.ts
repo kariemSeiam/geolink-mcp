@@ -216,7 +216,7 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse, ctx: O
 
   if (req.method !== "POST") {
     sendHtml(res, 200, connectPage({
-      lang, action: "/authorize", hidden,
+      lang, action: `${MCP_PATH}/authorize`, hidden,
       // The document is self-asserted, so a person is shown the host it came
       // from rather than the name it chose for itself.
       clientName: client.displayHost || client.name,
@@ -228,7 +228,7 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse, ctx: O
   const apiKey = (params.get("api_key") ?? "").trim();
   if (!apiKey) {
     sendHtml(res, 400, connectPage({
-      lang, action: "/authorize", hidden, clientName: client.displayHost || client.name,
+      lang, action: `${MCP_PATH}/authorize`, hidden, clientName: client.displayHost || client.name,
       registerUrl: ctx.registerUrl, siteUrl: ctx.siteUrl,
       error: lang === "ar" ? "لازم تدخل المفتاح." : "A key is required.",
     }));
@@ -239,7 +239,7 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse, ctx: O
   // instead of a message someone can act on.
   if (!(await validateUpstreamKey(ctx.upstreamBaseUrl, apiKey))) {
     sendHtml(res, 400, connectPage({
-      lang, action: "/authorize", hidden, clientName: client.displayHost || client.name,
+      lang, action: `${MCP_PATH}/authorize`, hidden, clientName: client.displayHost || client.name,
       registerUrl: ctx.registerUrl, siteUrl: ctx.siteUrl,
       error: lang === "ar" ? "المفتاح ده مرفوض من GeoLink." : "GeoLink rejected that key.",
     }));

@@ -54,6 +54,13 @@ const html = await r.text();
 ok("authorize renders the consent page", r.status === 200 && /Connect GeoLink/.test(html), `status=${r.status}`);
 ok("consent page cannot be framed", r.headers.get("x-frame-options") === "DENY" && /frame-ancestors 'none'/.test(r.headers.get("content-security-policy") ?? ""));
 
+// The form's own action attribute must match where the server actually listens —
+// a real browser submits to that literal string, not to whatever endpoint this
+// test happens to POST to below. Caught a real bug: action was hardcoded to
+// "/authorize" while the server only ever listened on "/mcp/authorize".
+const formAction = (html.match(/<form[^>]*\baction="([^"]+)"/) ?? [])[1];
+ok("consent form posts to the mounted authorize path", formAction === "/mcp/authorize", formAction);
+
 // 5. Missing PKCE must be refused.
 const noPkce = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9911/cb", response_type: "code" });
 r = await fetch(`${BASE}/mcp/authorize?${noPkce}`, { redirect: "manual" });
