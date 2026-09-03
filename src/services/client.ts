@@ -1,4 +1,4 @@
-import { CACHE_MAX_ENTRIES, CACHE_TTL_MS, ENDPOINTS, SERVER_NAME, SERVER_VERSION } from "../constants.js";
+import { CACHE_MAX_ENTRIES, CACHE_TTL_MS, ENDPOINTS, SERVER_NAME, SERVER_VERSION, UPSTREAM_PAGE_SIZE } from "../constants.js";
 import type { Config } from "../config.js";
 import type {
   ApiEnvelope,
@@ -200,19 +200,27 @@ export class GeoLinkClient {
     return normalizePlace(raw);
   }
 
+  /**
+   * Place search. `maxResults` is the depth the upstream engine pages to —
+   * it returns one page of {@link UPSTREAM_PAGE_SIZE} per request and keeps
+   * paging until the target is met or the source runs dry. It is part of the
+   * cache key: a shallow response must never be served to a deeper request.
+   */
   async textSearch(
     query: string,
     center: LatLng | undefined,
     language: string,
     country: string,
+    maxResults: number = UPSTREAM_PAGE_SIZE,
   ): Promise<Place[]> {
-    const cacheKey = `search|${language}|${country}|${query.trim().toLowerCase()}|${center?.lat?.toFixed(5)},${center?.lng?.toFixed(5)}`;
+    const cacheKey = `search|${language}|${country}|${maxResults}|${query.trim().toLowerCase()}|${center?.lat?.toFixed(5)},${center?.lng?.toFixed(5)}`;
     const raw = await this.request<unknown>(ENDPOINTS.textSearch, {
       query,
       latitude: center?.lat,
       longitude: center?.lng,
       language,
       country,
+      max_results: maxResults,
     }, cacheKey);
     return normalizePlaces(raw);
   }

@@ -8,7 +8,8 @@
  * into agent-shaped answers: nearest-by-road-time ranking and grid-tiled
  * area coverage sweeps.
  *
- * Transport: stdio by default; set TRANSPORT=http for stateless Streamable HTTP.
+ * Transport: stdio by default; set TRANSPORT=http for Streamable HTTP, which
+ * keeps one MCP session per client and reaps sessions left idle.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -17,7 +18,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { loadConfig, type Config } from "./config.js";
-import { SERVER_NAME, SERVER_VERSION } from "./constants.js";
+import { SERVER_NAME, SERVER_VERSION, SESSION_IDLE_TIMEOUT_MS, SESSION_REAP_INTERVAL_MS } from "./constants.js";
 import { registerPrompts } from "./prompts.js";
 import { registerResources } from "./resources.js";
 import { GeoLinkClient } from "./services/client.js";
@@ -54,8 +55,8 @@ export function buildServer(cfg: Config): McpServer {
 
 Pick tools by task:
 - One address ⇄ coordinates: geolink_geocode / geolink_reverse_geocode.
-- Places near a point: geolink_search_places (one page from one center).
-- Every place of a kind across a district/city/governorate: geolink_sweep_area — ALWAYS dry_run=true first to see the API-call count.
+- Places near a point: geolink_search_places — one center, as deep as the limit you ask for; source_exhausted tells you when there are no more.
+- Every place of a kind across a district/city/governorate: geolink_sweep_area — ALWAYS dry_run=true first to see the API-call count; raise results_per_point for dense categories.
 - A → B: geolink_get_directions (default 'summary'; ask for 'polyline' only when drawing a map).
 - Many-to-many travel times: geolink_distance_matrix (≤ ${cfg.maxMatrixCells} cells).
 - "Which branch/pharmacy is really closest by road?": geolink_find_nearest.
@@ -91,8 +92,39 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 }
 
 async function runHttp(cfg: Config): Promise<void> {
-  // Stateful session map: sessionId -> { server, transport }
-  const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
+  // Stateful session map: sessionId -> { server, transport, lastSeen }.
+  // Clients are supposed to DELETE when done, but a dropped connection or a
+  // crashed client never sends that, so idle sessions are reaped on a timer —
+  // without it the map grows for the lifetime of the process.
+  type Session = { server: McpServer; transport: StreamableHTTPServerTransport; lastSeen: number };
+  const sessions = new Map<string, Session>();
+
+  const touch = (sid: string | undefined): void => {
+    if (!sid) return;
+    const s = sessions.get(sid);
+    if (s) s.lastSeen = Date.now();
+  };
+
+  const closeSession = async (sid: string, reason: string): Promise<void> => {
+    const entry = sessions.get(sid);
+    if (!entry) return;
+    sessions.delete(sid);
+    try {
+      await entry.transport.close();
+      await entry.server.close();
+    } catch (err) {
+      console.error(`Session ${sid} cleanup error:`, err instanceof Error ? err.message : err);
+    }
+    console.error(`Session ${sid} closed (${reason}, total: ${sessions.size})`);
+  };
+
+  const reaper = setInterval(() => {
+    const cutoff = Date.now() - SESSION_IDLE_TIMEOUT_MS;
+    for (const [sid, s] of sessions) {
+      if (s.lastSeen < cutoff) void closeSession(sid, "idle");
+    }
+  }, SESSION_REAP_INTERVAL_MS);
+  reaper.unref();
 
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const requestId = randomUUID();
@@ -113,21 +145,11 @@ async function runHttp(cfg: Config): Promise<void> {
       return;
     }
 
-    // OAuth metadata — required by Claude.ai remote MCP discovery
-    if (url.pathname === "/.well-known/oauth-authorization-server" ||
-        url.pathname === "/.well-known/openid-configuration") {
-      const meta = {
-        issuer: `https://${req.headers.host}`,
-        authorization_endpoint: `https://${req.headers.host}/oauth/authorize`,
-        token_endpoint: `https://${req.headers.host}/oauth/token`,
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code"],
-        code_challenge_methods_supported: ["S256"],
-      };
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(meta));
-      return;
-    }
+    // No OAuth metadata is served on purpose. This server authenticates to
+    // GeoLink with its own key and has no authorization or token endpoint of
+    // its own; advertising discovery metadata pointing at routes that do not
+    // exist makes a client fail mid-handshake instead of falling back to
+    // connecting unauthenticated. Put a proxy in front of it for auth.
 
     if (url.pathname !== "/mcp") { res.writeHead(404).end(); return; }
 
@@ -146,6 +168,7 @@ async function runHttp(cfg: Config): Promise<void> {
         }));
         return;
       }
+      touch(sessionId);
       const { transport } = sessions.get(sessionId)!;
       try {
         await transport.handleRequest(req, res);
@@ -158,13 +181,7 @@ async function runHttp(cfg: Config): Promise<void> {
     // --- DELETE: terminate session ---
     if (req.method === "DELETE") {
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      if (sessionId && sessions.has(sessionId)) {
-        const { server, transport } = sessions.get(sessionId)!;
-        sessions.delete(sessionId);
-        await transport.close();
-        await server.close();
-        console.error(`[${requestId}] Session ${sessionId} deleted`);
-      }
+      if (sessionId) await closeSession(sessionId, "client DELETE");
       res.writeHead(204).end();
       return;
     }
@@ -180,7 +197,7 @@ async function runHttp(cfg: Config): Promise<void> {
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
       // Reuse existing session or create new one
-      let entry = sessionId ? sessions.get(sessionId) : undefined;
+      let entry: Session | undefined = sessionId ? sessions.get(sessionId) : undefined;
 
       if (!entry) {
         const server = buildServer(cfg);
@@ -188,7 +205,7 @@ async function runHttp(cfg: Config): Promise<void> {
           sessionIdGenerator: () => randomUUID(),
           enableJsonResponse: true,
           onsessioninitialized: (sid) => {
-            sessions.set(sid, { server, transport });
+            sessions.set(sid, { server, transport, lastSeen: Date.now() });
             console.error(`[${requestId}] Session created: ${sid} (total: ${sessions.size})`);
           },
         });
@@ -196,13 +213,14 @@ async function runHttp(cfg: Config): Promise<void> {
           const sid = transport.sessionId;
           if (sid && sessions.has(sid)) {
             sessions.delete(sid);
-            console.error(`Session ${sid} closed (total: ${sessions.size})`);
+            console.error(`Session ${sid} closed (transport, total: ${sessions.size})`);
           }
         };
         await server.connect(transport);
-        entry = { server, transport };
+        entry = { server, transport, lastSeen: Date.now() };
       }
 
+      touch(entry.transport.sessionId);
       await entry.transport.handleRequest(req, res, body);
       console.error(`[${requestId}] POST completed (${Date.now() - startTime}ms)`);
     } catch (err) {

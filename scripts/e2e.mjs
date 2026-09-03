@@ -72,11 +72,23 @@ check("find_nearest rejects neither mode", x.r.isError && /exactly one/.test(x.t
 x = await call("geolink_sweep_area", { query: "pharmacy", area: { bounds: { northeast: { lat: 30.10, lng: 31.30 }, southwest: { lat: 30.00, lng: 31.20 } } }, grid_spacing_km: 3, dry_run: true });
 check("sweep dry_run spends zero search calls", x.sc?.dry_run === true && x.sc.plan.grid_points === 16 && x.sc.plan.estimated_api_calls === 16, JSON.stringify(x.sc?.plan));
 x = await call("geolink_sweep_area", { query: "pharmacy", area: { place: "Giza" }, grid_spacing_km: 1, dry_run: true });
-check("sweep over-cap error suggests spacing", x.r.isError && /exceeds the cap/.test(x.text) && /grid_spacing_km=/.test(x.text), x.text.slice(0, 160));
+check("sweep over-cap error suggests spacing", x.r.isError && /over the cap/.test(x.text) && /grid_spacing_km=/.test(x.text), x.text.slice(0, 160));
 x = await call("geolink_sweep_area", { query: "pharmacy", area: { center: "Cairo Tower", radius_km: 4 }, grid_spacing_km: 2, response_format: "json", fields: ["name", "location"], limit: 5 });
 check("sweep executes, clips far result, dedupes Alpha", x.sc?.stats.api_calls_made === x.sc?.plan.grid_points && x.sc.stats.after_clip < x.sc.stats.raw_results && x.sc.stats.unique_results < x.sc.stats.after_clip, JSON.stringify(x.sc?.stats));
 check("sweep stats grouped by district", Object.keys(x.sc?.stats.by_district ?? {}).length >= 2 && !("Elsewhere" in x.sc.stats.by_district));
 check("sweep fields trimmed + paginated", x.sc?.places.length === 5 && Object.keys(x.sc.places[0]).sort().join(",") === "location,name" && x.sc.has_more === true);
+x = await call("geolink_search_places", { query: "deep cafe", near: "30.04,31.23", limit: 50 });
+check("search fetches the depth it was asked for", x.sc?.places.length === 50 && x.sc.fetched === 50, `places=${x.sc?.places.length} fetched=${x.sc?.fetched}`);
+check("search flags more may exist when depth was filled", x.sc?.source_exhausted === false && x.sc.has_more === true, JSON.stringify({ e: x.sc?.source_exhausted, m: x.sc?.has_more }));
+x = await call("geolink_search_places", { query: "cafe", near: "30.04,31.23", limit: 50 });
+check("search reports exhaustion when the area runs out", x.sc?.source_exhausted === true && x.sc.has_more === false, JSON.stringify({ e: x.sc?.source_exhausted, m: x.sc?.has_more, n: x.sc?.fetched }));
+
+x = await call("geolink_sweep_area", { query: "pharmacy", area: { center: "30.04,31.23", radius_km: 2 }, grid_spacing_km: 2, dry_run: true, results_per_point: 60 });
+check("sweep depth multiplies the quoted cost", x.sc?.plan.requests_per_point === 3 && x.sc.plan.estimated_api_calls === x.sc.plan.grid_points * 3, JSON.stringify(x.sc?.plan));
+check("sweep depth lowers concurrency to hold the outbound budget", x.sc?.plan.concurrency * Math.min(5, x.sc.plan.requests_per_point) <= 8, JSON.stringify(x.sc?.plan));
+x = await call("geolink_sweep_area", { query: "pharmacy", area: { center: "30.04,31.23", radius_km: 2 }, grid_spacing_km: 2, dry_run: true });
+check("sweep default depth is one request per point", x.sc?.plan.requests_per_point === 1 && x.sc.plan.estimated_api_calls === x.sc.plan.grid_points, JSON.stringify(x.sc?.plan));
+
 x = await call("geolink_sweep_area", { query: "cafe", area: { center: "30.04,31.23", radius_km: 2 }, grid_spacing_km: 2, response_format: "geojson" });
 check("sweep geojson output", x.sc?.geojson?.type === "FeatureCollection" && x.sc.geojson.features[0].geometry.type === "Point");
 

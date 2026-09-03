@@ -80,6 +80,7 @@ GeoLink MCP is built the other way around: **agent-shaped answers first, endpoin
 
 | Instead of… | You get… |
 |---|---|
+| A search that quietly stops at one page | `geolink_search_places` pages to the depth you ask for and returns `source_exhausted`, so "no more results" is a fact you're told, not a guess |
 | One `search` call returning one page from one point | `geolink_sweep_area` — tiles a whole region with a query grid, merges, de-duplicates, and groups results by district, with a `dry_run` that tells you the exact API cost *before* you spend it |
 | Straight-line "nearest" that lies in cities with rivers, one-ways, and bridges | `geolink_find_nearest` — ranks candidates by **real road travel time**, not centimeters on a map |
 | A wall of raw coordinate arrays for every route | `geolink_get_directions` with `route_detail` — summary by default, full polyline or sampled waypoints only when you ask, because geometry is 90% of the token cost and 10% of the value |
@@ -97,11 +98,11 @@ All seven tools accept `language` / `country` / `response_format` (`markdown` or
 |---|---|---|
 | 🔎 `geolink_geocode` | "Where is *this address*?" → one place, structured `address_parts`, viewport bounds | 1 |
 | 📍 `geolink_reverse_geocode` | "What's *at these coordinates*?" → address with `address_parts` | 1 |
-| 🗺️ `geolink_search_places` | "Find *category/brand* near *here*" → paged, sorted by distance | 1 (+1 if `near` is a name) |
+| 🗺️ `geolink_search_places` | "Find *category/brand* near *here*" → as deep as `limit` asks, sorted by distance | ceil(limit/20) (+1 if `near` is a name) |
 | 🛣️ `geolink_get_directions` | "How do I get from *A* to *B*?" → alternatives, geometry opt-in | 1 (+1 per named endpoint) |
 | 🧮 `geolink_distance_matrix` | "Travel time between *these N* and *those M*?" → grid + nearest-per-origin | 1 (+1 per named location) |
 | 🎯 `geolink_find_nearest` | "Which of these is *really* closest by road?" → ranked by real duration | 1 matrix (+1 search in discovery mode) |
-| 🕸️ `geolink_sweep_area` | "Find *everything* of this kind in *this region*" → grid-tiled, de-duplicated, `dry_run` first | = grid points |
+| 🕸️ `geolink_sweep_area` | "Find *everything* of this kind in *this region*" → grid-tiled, de-duplicated, `dry_run` first | grid points × ceil(results_per_point/20) |
 
 <details>
 <summary><b>🛣️ <code>geolink_get_directions</code> — geometry is opt-in, not automatic</b></summary>
@@ -200,7 +201,7 @@ A single search returns one page from one center point. To find *everything* of 
 - **No hardcoded region.** GeoLink's own coverage leads in Egypt today, but `language` / `country` are just optional bias parameters — everything works with coordinates or place names anywhere GeoLink resolves them, in any language it supports.
 - **No fabricated data, ever.** Bounds, districts, and addresses always come live from GeoLink's geocoder. Nothing in this server is a static local list pretending to be current.
 - **Errors that teach.** Every failure returns in-band as `Error (<kind>): <what happened>` — `Next step: <the exact parameter change that fixes it>`. An agent that hits a matrix-too-big error learns the batch size it needs, not just that something broke.
-- **Stateless by default.** A fresh server + transport instance per HTTP request — no session state to leak between callers. stdio mode never writes anything but protocol frames to stdout.
+- **Sessions that clean up after themselves.** HTTP mode keeps one MCP session per client, as the protocol expects, and reaps any session left idle for 30 minutes — a client that disappears without saying goodbye can't leak a session for the life of the process. stdio mode never writes anything but protocol frames to stdout.
 
 ---
 
@@ -300,6 +301,7 @@ bash scripts/smoke.sh  # HTTP transport, auth-failure path, startup validation, 
 
 GeoLink occasionally adds fields (website, phone, category, rating…) or raises per-query result counts. There are exactly **four** places to touch:
 
+0. If the change is about *how many* results a search returns rather than a new field, it lives in one place: the `maxResults` argument of `client.textSearch` (`src/services/client.ts`) and the `UPSTREAM_PAGE_SIZE` / `MAX_SEARCH_DEPTH` constants it reads.
 1. Add the raw field to `RawPlace` in `src/types.ts` and the clean field to `Place`.
 2. Map it in `normalizePlace` (`src/services/normalize.ts`) with a safe default.
 3. Add it to `PlaceSchema` (`src/services/schemas.ts`) and, if it should be trimmable, to the `fields` enum in `src/tools/sweep.ts`.

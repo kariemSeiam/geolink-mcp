@@ -2,7 +2,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { DEFAULT_DEDUPE_METERS, DEFAULT_GRID_SPACING_KM } from "../constants.js";
+import {
+  DEFAULT_DEDUPE_METERS,
+  DEFAULT_GRID_SPACING_KM,
+  MAX_SEARCH_DEPTH,
+  SWEEP_CLIENT_BATCH,
+  SWEEP_OUTBOUND_BUDGET,
+  UPSTREAM_PAGE_SIZE,
+} from "../constants.js";
 import { GeoLinkError } from "../services/client.js";
 import { fitToLimit, guarded, ok, paginate, placeMarkdown, placesToGeoJson } from "../services/format.js";
 import {
@@ -79,6 +86,15 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
       .max(25)
       .default(0)
       .describe("Expand the area's bounds outward by this many km before tiling (default 0). Useful when a geocoded viewport is tight."),
+    results_per_point: z
+      .number()
+      .int()
+      .min(UPSTREAM_PAGE_SIZE)
+      .max(MAX_SEARCH_DEPTH)
+      .default(UPSTREAM_PAGE_SIZE)
+      .describe(
+        `How many places to pull from each grid point (default ${UPSTREAM_PAGE_SIZE} = one request per point). Raise it for dense categories where a single point has more matches than one request returns — pharmacies downtown, cafés in a mall district. Costs ceil(results_per_point / ${UPSTREAM_PAGE_SIZE}) requests per point, so it multiplies the whole sweep: check dry_run first.`,
+      ),
     dry_run: z
       .boolean()
       .default(false)
@@ -141,8 +157,11 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
     plan: z.object({
       grid_spacing_km: z.number(),
       grid_points: z.number().int(),
+      results_per_point: z.number().int(),
+      requests_per_point: z.number().int(),
       estimated_api_calls: z.number().int(),
-      max_points_allowed: z.number().int(),
+      max_api_calls_allowed: z.number().int(),
+      concurrency: z.number().int(),
       sample_points: z.array(LatLngSchema),
     }),
     stats: StatsSchema.optional(),
@@ -165,7 +184,7 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
 
 A single geolink_search_places call returns one page from one center. This tool is how you get "all pharmacies in Giza" or "every school within 10 km of Tanta".
 
-Cost model: api_calls = grid points (+1 geocode if area is a name). Points ≈ (width/spacing) × (height/spacing). Hard cap: ${ctx.cfg.sweepMaxPoints} points (GEOLINK_SWEEP_MAX_POINTS). Runs ${ctx.cfg.sweepConcurrency} requests in parallel.
+Cost model: api_calls = grid_points × ceil(results_per_point / ${UPSTREAM_PAGE_SIZE}) (+1 geocode if the area is a name). Points ≈ (width/spacing) × (height/spacing). Hard cap: ${ctx.cfg.sweepMaxPoints} API calls (GEOLINK_SWEEP_MAX_POINTS). Runs up to ${ctx.cfg.sweepConcurrency} points in parallel, automatically reduced when results_per_point is raised so total simultaneous upstream requests stay bounded.
 
 WORKFLOW: call with dry_run=true first → read plan.estimated_api_calls → adjust grid_spacing_km → run for real.
 
@@ -173,6 +192,7 @@ Args:
   - query (string): Category or name to find everywhere.
   - area: {place} | {center, radius_km} | {bounds}.
   - grid_spacing_km (0.5-25, default 3).
+  - results_per_point (20-200, default 20): depth per point; multiplies API calls.
   - padding_km (0-25, default 0).
   - dry_run (bool, default false).
   - clip_to_area (bool, default true).
@@ -186,7 +206,8 @@ Returns (structuredContent):
   {
     "query", "dry_run",
     "area": { source, label, bounds, width_km, height_km, center, radius_km? },
-    "plan": { grid_spacing_km, grid_points, estimated_api_calls, max_points_allowed, sample_points },
+    "plan": { grid_spacing_km, grid_points, results_per_point, requests_per_point,
+              estimated_api_calls, max_api_calls_allowed, concurrency, sample_points },
     "stats"?: { api_calls_made, points_queried, points_succeeded, points_failed, raw_results, after_clip, unique_results,
                 by_governorate: {name: count}, by_district: {name: count} },      // not present on dry_run
     "total", "count", "offset", "has_more", "next_offset"?,
@@ -196,6 +217,7 @@ Returns (structuredContent):
 
 Examples:
   - "All pharmacies in Giza" -> query="pharmacy", area={place:"Giza"}, dry_run=true → then real run
+  - Dense category missing results per tile -> raise results_per_point to 40-60 and dry_run again to see the new cost
   - "Every ATM within 5 km of Smart Village" -> query="ATM", area={center:"Smart Village", radius_km:5}, grid_spacing_km=2
   - "Cafés in this box" -> query="cafe", area={bounds:{northeast:{...}, southwest:{...}}}, response_format="geojson"
 
@@ -254,21 +276,41 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
 
       /* ---------- Plan the grid ---------- */
       const points = buildGrid(bounds, args.grid_spacing_km, grid);
+      // Depth multiplies cost: each point spends one request per page of
+      // results it asks for. The cap is enforced on requests, not points, so
+      // the number the caller is shown is the number they actually pay.
+      const requestsPerPoint = Math.ceil(args.results_per_point / UPSTREAM_PAGE_SIZE);
+      const estimatedCalls = points.length * requestsPerPoint;
+      // Points in flight × that point's own parallel requests must stay within
+      // the outbound budget — see SWEEP_OUTBOUND_BUDGET.
+      const perPointParallel = Math.min(SWEEP_CLIENT_BATCH, requestsPerPoint);
+      const effectiveConcurrency = Math.max(
+        1,
+        Math.min(ctx.cfg.sweepConcurrency, Math.floor(SWEEP_OUTBOUND_BUDGET / perPointParallel)),
+      );
       const plan = {
         grid_spacing_km: args.grid_spacing_km,
         grid_points: points.length,
-        estimated_api_calls: points.length,
-        max_points_allowed: ctx.cfg.sweepMaxPoints,
+        results_per_point: args.results_per_point,
+        requests_per_point: requestsPerPoint,
+        estimated_api_calls: estimatedCalls,
+        max_api_calls_allowed: ctx.cfg.sweepMaxPoints,
+        concurrency: effectiveConcurrency,
         sample_points: points.slice(0, 5),
       };
       const areaOut = { source, label, bounds, width_km: size.width_km, height_km: size.height_km, center, ...(radiusKm !== undefined ? { radius_km: radiusKm } : {}) };
 
-      if (points.length > ctx.cfg.sweepMaxPoints) {
-        const suggested = suggestSpacingKm(bounds, ctx.cfg.sweepMaxPoints, grid);
+      if (estimatedCalls > ctx.cfg.sweepMaxPoints) {
+        const budgetPoints = Math.max(1, Math.floor(ctx.cfg.sweepMaxPoints / requestsPerPoint));
+        const suggested = suggestSpacingKm(bounds, budgetPoints, grid);
+        const depthNote =
+          requestsPerPoint > 1
+            ? ` — or drop results_per_point to ${UPSTREAM_PAGE_SIZE} (${points.length} calls)`
+            : "";
         throw new GeoLinkError(
-          `Grid of ${points.length} points exceeds the cap of ${ctx.cfg.sweepMaxPoints} (area ${size.width_km} × ${size.height_km} km at ${args.grid_spacing_km} km spacing)`,
+          `Sweep needs ${estimatedCalls} API calls (${points.length} points × ${requestsPerPoint}), over the cap of ${ctx.cfg.sweepMaxPoints} (area ${size.width_km} × ${size.height_km} km at ${args.grid_spacing_km} km spacing)`,
           "bad_request",
-          `Set grid_spacing_km=${suggested} (≈ ${buildGrid(bounds, suggested, grid).length} points), shrink the area, or raise GEOLINK_SWEEP_MAX_POINTS.`,
+          `Set grid_spacing_km=${suggested} (≈ ${buildGrid(bounds, suggested, grid).length * requestsPerPoint} calls)${depthNote}, shrink the area, or raise GEOLINK_SWEEP_MAX_POINTS.`,
         );
       }
 
@@ -289,8 +331,10 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
           "",
           `- **Area**: ${size.width_km} km × ${size.height_km} km (${source})`,
           `- **Bounds**: NE ${formatLatLng(bounds.northeast)} · SW ${formatLatLng(bounds.southwest)}`,
-          `- **Grid spacing**: ${args.grid_spacing_km} km`,
-          `- **Grid points / API calls**: **${points.length}** (cap ${ctx.cfg.sweepMaxPoints})`,
+          `- **Grid spacing**: ${args.grid_spacing_km} km → **${points.length}** points`,
+          `- **Depth**: ${args.results_per_point} results/point → ${requestsPerPoint} request(s) each`,
+          `- **API calls**: **${estimatedCalls}** (cap ${ctx.cfg.sweepMaxPoints})`,
+          `- **Concurrency**: ${effectiveConcurrency} point(s) at a time${effectiveConcurrency < ctx.cfg.sweepConcurrency ? ` (reduced from ${ctx.cfg.sweepConcurrency} to hold total parallel requests at ${effectiveConcurrency * perPointParallel})` : ""}`,
           `- **Sample points**: ${points.slice(0, 5).map((p) => formatLatLng(p, 4)).join("; ")}`,
           "",
           "_No quota spent. Re-run with dry_run=false to execute._",
@@ -317,10 +361,10 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
       const failures: { point_index: number; error_kind: GeoLinkError["kind"]; message: string }[] = [];
       const perPoint = await mapWithConcurrency(
         points,
-        ctx.cfg.sweepConcurrency,
+        effectiveConcurrency,
         async (p, index): Promise<Place[]> => {
           try {
-            return await ctx.client.textSearch(args.query, p, lang, country);
+            return await ctx.client.textSearch(args.query, p, lang, country, args.results_per_point);
           } catch (err) {
             // Auth/quota errors should abort the whole sweep; anything else is a soft miss.
             if (err instanceof GeoLinkError && (err.kind === "auth" || err.kind === "quota")) throw err;
