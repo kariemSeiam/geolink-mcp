@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { MAX_SEARCH_DEPTH, UPSTREAM_PAGE_SIZE } from "../constants.js";
+import { UPSTREAM_PAGE_SIZE } from "../constants.js";
 import { GeoLinkError } from "../services/client.js";
 import { cellText, fitToLimit, guarded, ok, routeMarkdown } from "../services/format.js";
 import { encodePolyline, formatLatLng, haversineKm, round, samplePoints } from "../services/geo.js";
@@ -438,7 +438,7 @@ Examples:
         // Search deeper than candidate_limit: the closest N by road time are
         // not always the closest N by straight line, so give the pre-filter a
         // wider pool to choose from.
-        const searchDepth = Math.min(MAX_SEARCH_DEPTH, Math.max(UPSTREAM_PAGE_SIZE, args.candidate_limit * 2));
+        const searchDepth = Math.max(UPSTREAM_PAGE_SIZE, args.candidate_limit * 2);
         const found = await ctx.client.textSearch(args.search_query ?? "", toLatLng(origin), lang, country, searchDepth);
         if (!found.length) {
           throw new GeoLinkError(

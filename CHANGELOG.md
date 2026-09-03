@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.2.0] - 2026-09-03
+
+### Added
+- The playbook now travels over the protocol as resources, so the guidance reaches any client — an IDE agent, a chat model, a harness with no filesystem — with nothing to install: `geolink://playbook` (which tool answers which question, and why depth is not coverage), `geolink://playbook/coverage` (the three ways area coverage silently fails and the test for each), `geolink://playbook/recipes` (compositions across several tools), `geolink://scale` (measured call counts, latency and response variance, dated).
+- `geolink_coverage_audit` prompt: runs a sweep, then tests the result for saturated cells, insufficient tile overlap, and edges outside the geocoded viewport before reporting a number.
+- `geolink_service_gap` prompt: two comparable sweeps, a demand-versus-supply ranking by district, and the road time to the nearest existing service as the closing argument.
+- `geolink://capabilities` now carries the full cost model, both guard rails with their env variables, every error kind, and a reading order.
+
+### Changed
+- Search depth has no ceiling. `limit` and `results_per_point` accept any value; cost scales linearly, the search stops early when the area runs out, and the docs carry the point past which a sweep returns more than depth for the same spend. The two size guards that remain — matrix cells and sweep API calls — are what make the cost quote meaningful, are env-tunable, and name the exact fix when they refuse.
+- Server instructions now state the depth-versus-coverage distinction up front and point at the resources, so a client reads it before its first call.
+
 ## [1.1.0] - 2026-09-03
 
 ### Added

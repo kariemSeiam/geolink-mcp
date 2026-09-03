@@ -214,12 +214,22 @@ Three ready-made prompt templates drive multi-step workflows without you having 
 | `geolink_coverage_report` | `category`, `area` | dry-run → tune spacing → sweep → per-district summary with gap analysis |
 | `geolink_nearest_branch` | `customer_location`, `branches` | `find_nearest` + recommendation, flags when straight-line and road-time disagree |
 | `geolink_route_brief` | `origin`, `destination` | directions with polyline + detour-ratio sanity check |
+| `geolink_coverage_audit` | `category`, `area` | sweep, then test the result for saturation, overlap and edge loss before reporting a number |
+| `geolink_service_gap` | `service`, `demand_proxy`, `area` | two comparable sweeps → demand-versus-supply ranking → drive time to the nearest existing one |
 
 ## 📚 Resources
 
 | URI | Contents |
 |---|---|
-| `geolink://capabilities` | Every endpoint wrapped, active defaults, safety limits, per-tool API cost, and recommended workflows — read this first if you're building against the server programmatically |
+| `geolink://playbook` | Which tool answers which question, and the distinction that causes most wrong answers: depth reads one center deeper, a sweep reads new ground |
+| `geolink://playbook/coverage` | The three ways area coverage silently fails — saturated cells, edges outside the geocoded viewport, spacing wider than each search's reach — and the test for each |
+| `geolink://playbook/recipes` | Compositions across several tools: reachable-area approximation, territory assignment, underserved-ground analysis, on-the-way search, address-confidence checks |
+| `geolink://scale` | Measured call counts, latency and response variance, with the planning rules that follow from them |
+| `geolink://capabilities` | Endpoints, defaults, cost formulas, the two guard rails that can refuse a request, and every error kind |
+
+The playbook travels over the protocol rather than as a file, so it reaches any
+client — an IDE agent, a chat model, a harness with no filesystem — without
+anything to install.
 
 ---
 

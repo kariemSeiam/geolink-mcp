@@ -61,7 +61,11 @@ Pick tools by task:
 - Many-to-many travel times: geolink_distance_matrix (≤ ${cfg.maxMatrixCells} cells).
 - "Which branch/pharmacy is really closest by road?": geolink_find_nearest.
 
-All results include address_parts {district, governorate, country} — group and filter on those rather than parsing address strings. Read resource geolink://capabilities for limits and per-tool API cost.`,
+All results include address_parts {district, governorate, country} — group and filter on those rather than parsing address strings.
+
+Depth is not coverage: a large limit reads one center more deeply, a sweep reads new ground. A search from one point never finds what is in the next district, however large the limit.
+
+Resources worth reading before a large job: geolink://playbook (which tool answers which question), geolink://scale (measured cost and latency), geolink://playbook/coverage (how to cover an area without leaving holes), geolink://playbook/recipes (compositions), geolink://capabilities (limits and cost formulas).`,
     },
   );
 

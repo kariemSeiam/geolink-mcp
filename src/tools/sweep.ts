@@ -5,7 +5,7 @@ import { z } from "zod";
 import {
   DEFAULT_DEDUPE_METERS,
   DEFAULT_GRID_SPACING_KM,
-  MAX_SEARCH_DEPTH,
+  DEEP_SEARCH_ADVISORY,
   SWEEP_CLIENT_BATCH,
   SWEEP_OUTBOUND_BUDGET,
   UPSTREAM_PAGE_SIZE,
@@ -90,7 +90,6 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
       .number()
       .int()
       .min(UPSTREAM_PAGE_SIZE)
-      .max(MAX_SEARCH_DEPTH)
       .default(UPSTREAM_PAGE_SIZE)
       .describe(
         `How many places to pull from each grid point (default ${UPSTREAM_PAGE_SIZE} = one request per point). Raise it for dense categories where a single point has more matches than one request returns — pharmacies downtown, cafés in a mall district. Costs ceil(results_per_point / ${UPSTREAM_PAGE_SIZE}) requests per point, so it multiplies the whole sweep: check dry_run first.`,
@@ -192,7 +191,7 @@ Args:
   - query (string): Category or name to find everywhere.
   - area: {place} | {center, radius_km} | {bounds}.
   - grid_spacing_km (0.5-25, default 3).
-  - results_per_point (20-200, default 20): depth per point; multiplies API calls.
+  - results_per_point (≥20, default 20, no ceiling): depth per point; multiplies API calls.
   - padding_km (0-25, default 0).
   - dry_run (bool, default false).
   - clip_to_area (bool, default true).

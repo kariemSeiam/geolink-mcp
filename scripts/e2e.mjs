@@ -20,11 +20,11 @@ const tools = (await client.listTools()).tools;
 check("7 tools registered", tools.length === 7, tools.map(t => t.name).join(","));
 check("all tools have annotations + outputSchema", tools.every(t => t.annotations?.readOnlyHint === true && t.outputSchema));
 const resources = (await client.listResources()).resources;
-check("1 resource", resources.length === 1, resources.map(r => r.uri).join(","));
+check("playbook + capabilities served as resources", ["geolink://capabilities", "geolink://scale", "geolink://playbook", "geolink://playbook/coverage", "geolink://playbook/recipes"].every(u => resources.some(r => r.uri === u)), resources.map(r => r.uri).join(","));
 const prompts = (await client.listPrompts()).prompts;
-check("3 prompts", prompts.length === 3, prompts.map(p => p.name).join(","));
+check("prompts cover routing, coverage and gap analysis", ["geolink_coverage_report", "geolink_nearest_branch", "geolink_route_brief", "geolink_coverage_audit", "geolink_service_gap"].every(n => prompts.some(p => p.name === n)), prompts.map(p => p.name).join(","));
 const cap = JSON.parse((await client.readResource({ uri: "geolink://capabilities" })).contents[0].text);
-check("capabilities resource has limits", cap.limits.sweep_max_points === 60);
+check("capabilities states what it refuses and what it does not cap", cap.limits.refuses_above.sweep_api_calls === 60 && typeof cap.limits.no_ceiling_on.search_limit === "string" && cap.cost_model.unit === "upstream HTTP requests", JSON.stringify(cap.limits.refuses_above));
 const govs = JSON.parse((await client.readResource({ uri: "geolink://capabilities" })).contents[0].text);
 check("capabilities lists tools", Object.keys(govs.tools).length === 7);
 const p = await client.getPrompt({ name: "geolink_nearest_branch", arguments: { customer_location: "Tahrir", branches: "A;B" } });
@@ -77,6 +77,11 @@ x = await call("geolink_sweep_area", { query: "pharmacy", area: { center: "Cairo
 check("sweep executes, clips far result, dedupes Alpha", x.sc?.stats.api_calls_made === x.sc?.plan.grid_points && x.sc.stats.after_clip < x.sc.stats.raw_results && x.sc.stats.unique_results < x.sc.stats.after_clip, JSON.stringify(x.sc?.stats));
 check("sweep stats grouped by district", Object.keys(x.sc?.stats.by_district ?? {}).length >= 2 && !("Elsewhere" in x.sc.stats.by_district));
 check("sweep fields trimmed + paginated", x.sc?.places.length === 5 && Object.keys(x.sc.places[0]).sort().join(",") === "location,name" && x.sc.has_more === true);
+const pb = await client.readResource({ uri: "geolink://playbook" });
+check("playbook is readable markdown and states depth is not coverage", pb.contents[0].mimeType === "text/markdown" && /Depth is not coverage/.test(pb.contents[0].text), pb.contents[0].mimeType);
+const sc = JSON.parse((await client.readResource({ uri: "geolink://scale" })).contents[0].text);
+check("scale resource carries measured numbers with a date", typeof sc.measured_on === "string" && Array.isArray(sc.search) && sc.search.length >= 3, sc.measured_on);
+
 x = await call("geolink_search_places", { query: "deep cafe", near: "30.04,31.23", limit: 50 });
 check("search fetches the depth it was asked for", x.sc?.places.length === 50 && x.sc.fetched === 50, `places=${x.sc?.places.length} fetched=${x.sc?.fetched}`);
 check("search flags more may exist when depth was filled", x.sc?.source_exhausted === false && x.sc.has_more === true, JSON.stringify({ e: x.sc?.source_exhausted, m: x.sc?.has_more }));
