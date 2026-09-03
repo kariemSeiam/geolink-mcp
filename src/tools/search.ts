@@ -53,14 +53,14 @@ export function registerSearchTools(server: McpServer, ctx: ToolContext): void {
     "geolink_search_places",
     {
       title: "Search places",
-      description: `Find places and points of interest by free-text query, optionally around a center point. Every result carries structured Egyptian address parts (district, governorate, country) so you can filter or group without parsing strings.
+      description: `Find places and points of interest by free-text query, optionally around a center point. Every result carries structured address parts (district, governorate, country) so you can filter or group without parsing strings.
 
 Args:
   - query (string): Category, brand, or place name. "pharmacy", "كافيه", "Carrefour".
   - near (string | {lat,lng}, optional): Search center as "lat,lng" or a place name (geocoded, cached). Use it for anything local.
   - limit (1-100, default 20), offset (default 0): Pagination over the result set.
   - sort_by_distance (bool, default true): With near, order by straight-line distance and add distance_km.
-  - language, country: Defaults "ar" / "eg".
+  - language, country: Defaults "en" / none.
   - response_format ('markdown' | 'json').
 
 Returns (structuredContent):

@@ -19,7 +19,7 @@ What you expected to happen.
 What actually happened — paste the error envelope (`Error (<kind>): ...`) if there is one.
 
 **Environment**
-- geolink-mcp-server version:
+- geolink-mcp version:
 - Node.js version:
 - Transport: stdio / http
 - MCP client: Claude Desktop / Claude Code / Cursor / other

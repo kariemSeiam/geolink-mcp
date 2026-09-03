@@ -23,8 +23,7 @@ ENV NODE_ENV=production \
     PORT=3010 \
     HOST=0.0.0.0 \
     GEOLINK_BASE_URL=https://www.geolink-eg.com \
-    GEOLINK_DEFAULT_LANGUAGE=ar \
-    GEOLINK_DEFAULT_COUNTRY=eg \
+    GEOLINK_DEFAULT_LANGUAGE=en \
     GEOLINK_TIMEOUT_MS=30000
 
 COPY package*.json ./

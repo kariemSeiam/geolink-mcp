@@ -85,7 +85,7 @@ Args:
   - route_detail ('summary' | 'polyline' | 'waypoints', default 'summary').
   - max_alternatives (1-10, default 3).
   - max_waypoints (2-2000, default 200): sampling cap for 'waypoints' mode.
-  - language, country: Defaults "ar" / "eg".
+  - language, country: Defaults "en" / none.
   - response_format ('markdown' | 'json').
 
 Returns (structuredContent):
@@ -234,7 +234,7 @@ Guard rail: origins × destinations must be ≤ ${ctx.cfg.maxMatrixCells} cells 
 Args:
   - origins, destinations (array of string | {lat,lng}): 1-50 each.
   - nearest_only (bool, default false): Skip the full grid; return just the nearest destination per origin.
-  - language, country: Defaults "ar" / "eg".
+  - language, country: Defaults "en" / none.
   - response_format ('markdown' | 'json').
 
 Returns (structuredContent):

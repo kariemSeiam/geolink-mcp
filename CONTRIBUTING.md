@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/kariemSeiam/geolink-mcp-server
-cd geolink-mcp-server
+git clone https://github.com/kariemSeiam/geolink-mcp
+cd geolink-mcp
 npm install
 cp .env.example .env   # fill in GEOLINK_API_KEY
 npm run dev             # tsx watch, stdio

@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.0.2] - 2026-09-03
+
+### Changed
+
+- **Renamed the package and repository from `geolink-mcp-server` to `geolink-mcp`.**
+  Install command, `bin` entry, Docker image/container names, `server.json`,
+  and `smithery.yaml` all updated. GitHub redirects the old repo URL
+  automatically.
+- Rewrote README.md end to end: architecture diagram, tool-by-tool deep
+  dives, FAQ, and a "why this server exists" section grounded in what
+  actually differentiates the composite tools (`find_nearest`,
+  `sweep_area`) from a thin 1:1 endpoint wrapper.
+- Fixed stale tool-description defaults left over from the region
+  clean-up in 1.0.1 (`geolink_geocode`, `geolink_reverse_geocode`,
+  `geolink_search_places`, `geolink_get_directions`, `geolink_distance_matrix`
+  still documented `"ar"`/`"eg"` as defaults after the code changed to
+  `"en"`/unset — description text now matches actual behavior).
+
 ## [1.0.1] - 2026-09-03
 
 ### Security
