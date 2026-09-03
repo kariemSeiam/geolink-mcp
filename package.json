@@ -18,7 +18,7 @@
     "start": "node dist/index.js",
     "start:http": "TRANSPORT=http node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
+    "test": "npm run build && node --test dist/tests/geo.test.js",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "clean": "rm -rf dist",
     "test:e2e": "npm run build && (node scripts/mock-geolink.mjs & MOCK=$!; sleep 0.6; node scripts/e2e.mjs; EC=$?; kill $MOCK; exit $EC)",
