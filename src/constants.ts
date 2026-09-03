@@ -1,9 +1,9 @@
 export const SERVER_NAME = "geolink-mcp-server";
-export const SERVER_VERSION = "1.0.0";
+export const SERVER_VERSION = "1.0.1";
 
 export const DEFAULT_BASE_URL = "https://www.geolink-eg.com";
-export const DEFAULT_LANGUAGE = "ar";
-export const DEFAULT_COUNTRY = "eg";
+export const DEFAULT_LANGUAGE = "en";
+export const DEFAULT_COUNTRY = "";
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Max characters of text returned by a single tool call before truncation kicks in. */

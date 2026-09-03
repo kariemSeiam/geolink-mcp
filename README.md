@@ -7,12 +7,12 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](package.json)
 [![MCP](https://img.shields.io/badge/MCP-server-blueviolet)](https://modelcontextprotocol.io)
 
-**GeoLink for AI agents.** An MCP server that puts [GeoLink](https://geolink-eg.com) — Egypt-native geocoding, reverse geocoding, place search, directions, and distance matrix — into Claude, Cursor, Claude Code, and any other MCP client, then goes further with two composite tools that turn raw endpoints into answers agents actually need:
+**GeoLink for AI agents.** An MCP server that puts [GeoLink](https://geolink-eg.com) — geocoding, reverse geocoding, place search, directions, and distance matrix — into Claude, Cursor, Claude Code, and any other MCP client, then goes further with two composite tools that turn raw endpoints into answers agents actually need:
 
 - **`geolink_find_nearest`** — *"which branch is really closest by road?"* — ranks known candidates or searched places by true travel time from one origin.
-- **`geolink_sweep_area`** — *"every pharmacy in Giza"* — tiles an area (governorate, city, radius, or box) with a grid of query points, runs a search at each, merges, de-duplicates, clips, and groups the results by district. Dry-run first to see the exact API cost.
+- **`geolink_sweep_area`** — *"every pharmacy in this city"* — tiles an area (place name, city, radius, or box) with a grid of query points, runs a search at each, merges, de-duplicates, clips, and groups the results by district. Dry-run first to see the exact API cost.
 
-Every result carries GeoLink's structured `address_parts {district, governorate, country}`, so agents group and filter on real fields instead of parsing address strings.
+Every result carries GeoLink's structured `address_parts {district, governorate, country}`, so agents group and filter on real fields instead of parsing address strings. GeoLink's own coverage is strongest in Egypt today; the server itself has no hardcoded region — language and country bias are configurable, and every input works with coordinates or place names anywhere GeoLink resolves them.
 
 ---
 
@@ -71,8 +71,8 @@ Binds to `127.0.0.1` by default. Set `HOST=0.0.0.0` only behind a reverse proxy 
 | --- | --- | --- |
 | `GEOLINK_API_KEY` | — | **Required.** Passed to GeoLink as the `key` query parameter. Never logged. |
 | `GEOLINK_BASE_URL` | `https://www.geolink-eg.com` | Override for staging/mocks. |
-| `GEOLINK_DEFAULT_LANGUAGE` | `ar` | Any tool call can override with `language`. |
-| `GEOLINK_DEFAULT_COUNTRY` | `eg` | Any tool call can override with `country`. |
+| `GEOLINK_DEFAULT_LANGUAGE` | `en` | Any tool call can override with `language`. |
+| `GEOLINK_DEFAULT_COUNTRY` | *(none)* | Any tool call can override with `country`; unset means no bias. |
 | `GEOLINK_TIMEOUT_MS` | `30000` | Per upstream request. |
 | `GEOLINK_MAX_MATRIX_CELLS` | `100` | `origins × destinations` cap for the matrix tools. |
 | `GEOLINK_SWEEP_MAX_POINTS` | `200` | Max grid points (= max API calls) per sweep. |
@@ -126,12 +126,12 @@ A single search returns one page from one center. To find *everything* in an are
 1. Resolve the area → bounds (`{place}` via geocode viewport, `{center, radius_km}`, or `{bounds}`), optionally padded by `padding_km`.
 2. Lay a square grid, one query point per `grid_spacing_km × grid_spacing_km` cell (longitude corrected for latitude; circle areas drop the corners).
 3. Run one `text_search` per point with bounded concurrency; tolerate individual failures, abort on auth/quota errors.
-4. Clip results to the area (`clip_to_area`), de-duplicate (same normalized name within `dedupe_meters`, Arabic-aware: tashkeel stripped, alef/ta-marbuta/alef-maqsura folded), and count by `governorate` and `district`.
+4. Clip results to the area (`clip_to_area`), de-duplicate (same normalized name within `dedupe_meters`, script-aware normalization e.g. Arabic tashkeel stripped, alef/ta-marbuta/alef-maqsura folded), and count by `governorate` and `district`.
 5. Page with `limit`/`offset`; trim with `fields`; or emit a GeoJSON `FeatureCollection` with `response_format="geojson"`.
 
-**Cost math:** points ≈ `ceil(width / spacing) × ceil(height / spacing)`. Giza's viewport at 3 km is a few dozen points; at 1 km it's hundreds. **Always `dry_run: true` first** — it returns the exact grid size and call count without touching the search endpoint. If the grid exceeds `GEOLINK_SWEEP_MAX_POINTS`, the error tells you the smallest spacing that fits.
+**Cost math:** points ≈ `ceil(width / spacing) × ceil(height / spacing)`. A city viewport at 3 km is a few dozen points; at 1 km it's hundreds. **Always `dry_run: true` first** — it returns the exact grid size and call count without touching the search endpoint. If the grid exceeds `GEOLINK_SWEEP_MAX_POINTS`, the error tells you the smallest spacing that fits.
 
-Spacing guide: dense urban categories (pharmacies, cafés) 2–3 km; sparse categories or rural governorates 5–7 km. The search endpoint's own result cap determines how much each point "sees"; when GeoLink raises per-query results to 200–500, widen spacing accordingly.
+Spacing guide: dense urban categories (pharmacies, cafés) 2–3 km; sparse categories or rural areas 5–7 km. The search endpoint's own result cap determines how much each point "sees"; when GeoLink raises per-query results to 200–500, widen spacing accordingly.
 
 Clients that pass a `progressToken` receive `notifications/progress` as grid points complete.
 
@@ -142,7 +142,6 @@ Clients that pass a `progressToken` receive `notifications/progress` as grid poi
 | URI | Contents |
 | --- | --- |
 | `geolink://capabilities` | Endpoints wrapped, defaults, active limits, per-tool call cost, recommended workflows |
-| `geolink://egypt/governorates` | The 27 governorates (English + Arabic) — pass a name as `area: {place: ...}` |
 
 ## Prompts
 
@@ -162,8 +161,8 @@ Every failure is returned in-band (`isError: true`) as `Error (<kind>): <what ha
 
 - **One response envelope in, one out.** GeoLink's `{success, data}` / `{success, error}` is normalized once in the client; tools never see raw payloads. Every field is defaulted, so `outputSchema` validation can't fail on a sparse upstream response.
 - **Token budget is a first-class constraint.** Geometry is opt-in, matrix grids can collapse to nearest-only, sweeps page and field-trim, and every list respects a 25 000-character ceiling with an explicit truncation message.
-- **Egypt-first defaults, world-ready inputs.** `ar`/`eg` unless told otherwise; Arabic and English queries; Arabic-aware dedup.
-- **No fabricated data.** The governorate resource is names only — bounds always come live from GeoLink's geocoder.
+- **Egypt-strong today, no hardcoded region.** GeoLink's own coverage leads in Egypt, but the server has zero country lock-in — `language`/`country` are just optional bias parameters, defaulting to unset. Arabic and English queries both work; dedup is script-aware.
+- **No fabricated data.** Bounds and address data always come live from GeoLink's geocoder — nothing here is a static local list.
 - **Stateless HTTP.** A fresh server + transport per request; no sessions to leak. stdio never writes to stdout except protocol frames.
 
 ## Development

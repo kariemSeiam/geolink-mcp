@@ -26,7 +26,7 @@ console.log(r.isError, "|", r.content[0].text.replace(/\n/g, " / "));
 await c.close();
 JS
 cp /tmp/wrongkey.mjs scripts/_wrongkey.mjs && node scripts/_wrongkey.mjs; rm -f scripts/_wrongkey.mjs
-echo "--- no key at startup:"; node dist/index.js 2>&1 | head -1
+echo "--- no key at startup (should fail fast with a clear message):"; node dist/index.js 2>&1 | head -1
 echo "--- --help:"; node dist/index.js --help | head -2
 echo "--- --version:"; node dist/index.js --version
 kill $MOCK 2>/dev/null

@@ -40,8 +40,12 @@ function strEnv(name: string, fallback: string): string {
 }
 
 export function loadConfig(): Config {
-  const apiKey = strEnv("GEOLINK_API_KEY", "0ae3efb1-9685-4530-86e2-606dccecec50");
-  // API key has a built-in default
+  const apiKey = strEnv("GEOLINK_API_KEY", "");
+  if (!apiKey) {
+    throw new Error(
+      "GEOLINK_API_KEY is required. Get a free key at https://geolink-eg.com/register and set it as an environment variable.",
+    );
+  }
 
   const baseUrl = strEnv("GEOLINK_BASE_URL", DEFAULT_BASE_URL).replace(/\/+$/, "");
   try {

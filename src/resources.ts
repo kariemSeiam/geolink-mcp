@@ -2,40 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ENDPOINTS, SERVER_NAME, SERVER_VERSION } from "./constants.js";
 import type { ToolContext } from "./services/resolve.js";
 
-/**
- * Egypt's 27 governorates (English + Arabic). Names only — pass one to
- * geolink_sweep_area as area={place: "..."} and GeoLink returns live bounds.
- */
-export const EGYPT_GOVERNORATES: { en: string; ar: string }[] = [
-  { en: "Cairo", ar: "القاهرة" },
-  { en: "Giza", ar: "الجيزة" },
-  { en: "Alexandria", ar: "الإسكندرية" },
-  { en: "Qalyubia", ar: "القليوبية" },
-  { en: "Dakahlia", ar: "الدقهلية" },
-  { en: "Sharqia", ar: "الشرقية" },
-  { en: "Gharbia", ar: "الغربية" },
-  { en: "Menofia", ar: "المنوفية" },
-  { en: "Beheira", ar: "البحيرة" },
-  { en: "Kafr El Sheikh", ar: "كفر الشيخ" },
-  { en: "Damietta", ar: "دمياط" },
-  { en: "Port Said", ar: "بورسعيد" },
-  { en: "Ismailia", ar: "الإسماعيلية" },
-  { en: "Suez", ar: "السويس" },
-  { en: "North Sinai", ar: "شمال سيناء" },
-  { en: "South Sinai", ar: "جنوب سيناء" },
-  { en: "Red Sea", ar: "البحر الأحمر" },
-  { en: "Matrouh", ar: "مطروح" },
-  { en: "New Valley", ar: "الوادي الجديد" },
-  { en: "Fayoum", ar: "الفيوم" },
-  { en: "Beni Suef", ar: "بني سويف" },
-  { en: "Minya", ar: "المنيا" },
-  { en: "Assiut", ar: "أسيوط" },
-  { en: "Sohag", ar: "سوهاج" },
-  { en: "Qena", ar: "قنا" },
-  { en: "Luxor", ar: "الأقصر" },
-  { en: "Aswan", ar: "أسوان" },
-];
-
 export function registerResources(server: McpServer, ctx: ToolContext): void {
   server.registerResource(
     "capabilities",
@@ -93,23 +59,5 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
       ],
     }),
   );
-
-  server.registerResource(
-    "egypt-governorates",
-    "geolink://egypt/governorates",
-    {
-      title: "Egypt governorates",
-      description: "The 27 governorates of Egypt in English and Arabic. Use a name as area={place: ...} in geolink_sweep_area, or match address_parts.governorate values.",
-      mimeType: "application/json",
-    },
-    async (uri) => ({
-      contents: [
-        {
-          uri: uri.href,
-          mimeType: "application/json",
-          text: JSON.stringify({ count: EGYPT_GOVERNORATES.length, governorates: EGYPT_GOVERNORATES }, null, 2),
-        },
-      ],
-    }),
-  );
 }
+
