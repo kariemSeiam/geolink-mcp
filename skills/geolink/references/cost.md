@@ -92,3 +92,10 @@ Points in flight are therefore divided down as `results_per_point` rises, holdin
 the product within a fixed budget. At default depth nothing changes: one request
 per point, four points at a time. At `results_per_point: 60` the server runs two
 points at a time instead of four, and says so in `plan.concurrency`.
+
+The budget exists because of the single address, not because of the source's
+published limits — it is a guess at what looks automated, deliberately
+conservative. Where the upstream is configured with proxy rotation
+(`ENABLE_PROXY`), the burst leaves from several addresses and the reason for the
+budget weakens; raising `GEOLINK_SWEEP_CONCURRENCY` is defensible there and is
+not defensible without it.
