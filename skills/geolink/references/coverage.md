@@ -35,9 +35,10 @@ sweep will still look successful.
 grid is saturated and the count is a floor, not a total.
 
 **The fix,** in order of preference:
+
 1. Raise `results_per_point` and re-run `dry_run` to see the new cost.
-2. Halve `grid_spacing_km` — more cells, each with less to hold.
-3. Sweep the dense districts separately at tighter spacing, and the rest coarsely.
+1. Halve `grid_spacing_km` — more cells, each with less to hold.
+1. Sweep the dense districts separately at tighter spacing, and the rest coarsely.
 
 Option 3 is usually right for a city: one sweep at uniform spacing spends most
 of its calls on empty ground and still saturates downtown.

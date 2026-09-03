@@ -19,7 +19,7 @@ The page size is 20. Depth is bought in units of 20, and the engine stops early
 the moment the area runs out, so asking for 100 in a place that holds 30 costs
 two requests, not five.
 
-## Measured, 2026-09-03, geolink-eg.com
+## Measured, 2026-09-03, against `geolink-eg.com`
 
 | Request | Results | Upstream requests | Wall clock |
 |---|---|---|---|

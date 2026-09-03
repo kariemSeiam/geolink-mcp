@@ -22,7 +22,7 @@ determinism measurement taken on a dense query was generalised to all queries an
 used to reject a correct hypothesis. Each gate below exists because one of those
 shipped.
 
-## Run the gates in order. Do not reorder them.
+## Run the gates in order, and do not reorder them
 
 The order matters. Most errors here come from choosing a method before
 establishing what kind of question was asked, then defending the method instead
@@ -30,7 +30,7 @@ of changing it.
 
 | # | Gate | Output | Blocks on |
 |---|---|---|---|
-| 1 | **Shape** — one point, or an area? | the question classified | a regional question answered with one search |
+| 1 | **Shape** — one point or an area, and how wrong may it be? | the question classified + a stated tolerance | a regional question answered with one search |
 | 2 | **Anchor** — resolve every place name to coordinates, and check them | verified centers | a geocode nobody tested |
 | 3 | **Budget** — what will this cost in calls and seconds? | a quoted plan | an unquoted sweep |
 | 4 | **Retrieve** — search, sweep, route, or matrix | raw results + their stats | — |
@@ -57,38 +57,35 @@ one point and runs out. Raising the limit buys more of the same neighbourhood.
 Getting this backwards produces an answer that is complete-looking and wrong,
 which is worse than an error, because nothing about the response looks off.
 
+Then ask the question nothing downstream can infer: **how wrong is this allowed
+to be?** A count for a slide that tolerates ±20% and a count for a filing that
+tolerates almost nothing take different spacing, different depth and different
+money. Without a stated tolerance, every later gate decides "is this enough" on
+taste, and Gate 5's "at least N" is neither acceptable nor a failure because
+there is nothing to compare it against.
+
 ## Gate 2 — Anchor
 
-Every name costs a geocode and every geocode returns exactly one answer with no
-indication of how confident it is. Before building on a coordinate:
+Every name costs a geocode, and every geocode returns exactly one answer with no
+indication of how confident it is. A wrong anchor makes every later gate produce
+a well-verified answer about the wrong place.
 
-- Reverse-geocode it. If the district disagrees with the district in the original
-  result, the match is weak.
-- If the name was ambiguous — a common brand, a street that exists in four
-  governorates — run \`geolink_search_places\` with the same string and look at the
-  spread. Scattered candidates mean the name needs disambiguating with the user,
-  not picking.
-- Pass coordinates rather than names wherever they are already known. It is the
-  cheapest optimisation available and removes this whole class of doubt.
-
-Read [tripwires.md](references/tripwires.md) §7 before using a geocoded area as a sweep
-boundary. A viewport is not a border.
+Pass coordinates instead of names wherever they are already known — cheapest
+optimisation available, and it removes this doubt entirely. Where a name must be
+resolved, [recipes.md](references/recipes.md) has the confidence check, and
+[tripwires.md](references/tripwires.md) §7 covers using a geocoded area as a
+sweep boundary. A viewport is not a border.
 
 ## Gate 3 — Budget
 
-Every tool's cost is a formula, and [cost.md](references/cost.md) has all of them with
-measured latency. The two that matter most:
-
-\`\`\`text
-search_places   ceil((limit + offset) / 20) requests
-sweep_area      grid_points × ceil(results_per_point / 20) requests
-\`\`\`
-
 For anything regional, run \`geolink_sweep_area\` with \`dry_run: true\` first. It
-returns the exact call count without spending any of it. Quote that number to
-whoever asked before spending it — a sweep of a governorate at tight spacing is
-minutes of wall-clock and hundreds of calls, and nobody wants to discover that
-afterwards.
+returns the exact call count without spending any of it. Quote that number
+before spending it — a governorate at tight spacing is minutes of wall-clock and
+hundreds of calls, and nobody wants to learn that afterwards.
+
+[cost.md](references/cost.md) carries every formula and the measured latency
+behind it. The one worth holding in mind: latency follows rounds, not results,
+so depth is close to free in time and only linear in calls.
 
 ## Gate 4 — Retrieve
 
@@ -110,14 +107,24 @@ mistake available here.
 
 ## Gate 5 — Completeness
 
-This is the gate that separates a number from a defensible number. Open
-[coverage.md](references/coverage.md) and run its three tests — saturation,
-overlap, edges — with the arithmetic written out. They are there and not here so
-there is one copy to keep correct.
+This is the gate that separates a number from a defensible number, and most of
+it is now computed for you.
 
-A search rather than a sweep has a simpler test: \`source_exhausted\`. When it is
-\`true\`, the area genuinely has no more. When it is \`false\`, you stopped asking
-first — say so rather than implying you found everything.
+A sweep returns a \`completeness\` block: \`saturated_points\` (counted per point,
+never averaged — an average hides five saturated downtown cells behind 195 empty
+rural ones), \`overlap_ratio\`, a \`verdict\` of \`bounded\`, \`floor\` or
+\`gaps_likely\`, and \`notes\` naming the parameter change for each problem found.
+A \`floor\` verdict means report "at least N", not "N".
+
+One test it cannot run for you is the edges, because nothing inside a sweep can
+see what the bounds left out: reverse-geocode the corners and centre of
+\`area.bounds\` and look for a district missing from \`stats.by_district\`.
+[coverage.md](references/coverage.md) has the arithmetic and what each number
+means.
+
+A search has a simpler test: \`source_exhausted\`. When \`true\`, the area has no
+more. When \`false\`, you stopped asking first — say so rather than implying you
+found everything.
 
 ## Gate 6 — Tripwires
 
@@ -129,6 +136,11 @@ duplicates" is what let §2 through the first time; the check is specific and th
 specificity is the whole value.
 
 ## Gate 7 — Answer
+
+This gate does not certify a count. It attests to a method over a stated scope:
+here is what was covered, how, when, and where it falls short. That framing is
+why an exception is a normal part of a passing answer rather than an admission —
+what damages trust is a caveat that was found later by someone else.
 
 State the number, then state what it excludes. Three sentences that make a map
 answer trustworthy:
@@ -162,13 +174,19 @@ skill would be wrong within a quarter.
 
 | File | Budget | When it is hit |
 |---|---|---|
-| \`SKILL.md\` | 200 lines | move the longest gate's detail into a reference file and leave the gate pointing at it |
+| \`SKILL.md\` | 220 lines | move the longest gate's detail into a reference file and leave the gate pointing at it |
 | each reference | 250 lines | split by failure mode or by tool, never by adding a second topic to an existing file |
 | \`ledger/\` rows | no limit | append-only; a row is never edited after its verdict is written |
 
 This file is loaded whenever a map question is asked, so its length is a cost
 paid on every one of them. Detail belongs in the references, which are loaded
 only when a gate points at them by name.
+
+The budget was 200 and was raised once, after gates 1, 5 and 7 gained content
+that belonged in them. Gates 2 and 3 were emptied into the references first —
+raising the number is the last move, not the first, and it is recorded here
+rather than done quietly, because a budget that moves without a note is not a
+budget.
 
 ## Files
 
@@ -224,9 +242,10 @@ sweep will still look successful.
 grid is saturated and the count is a floor, not a total.
 
 **The fix,** in order of preference:
+
 1. Raise \`results_per_point\` and re-run \`dry_run\` to see the new cost.
-2. Halve \`grid_spacing_km\` — more cells, each with less to hold.
-3. Sweep the dense districts separately at tighter spacing, and the rest coarsely.
+1. Halve \`grid_spacing_km\` — more cells, each with less to hold.
+1. Sweep the dense districts separately at tighter spacing, and the rest coarsely.
 
 Option 3 is usually right for a city: one sweep at uniform spacing spends most
 of its calls on empty ground and still saturates downtown.
@@ -280,20 +299,20 @@ already here.
 
 ## Reachable area — approximate isochrone
 
-*"Where can a driver get to in 20 minutes?"*
+### "Where can a driver get to in 20 minutes?"
 
 1. Take bearings every 30° around the origin at a few trial radii
    (2, 5, 10 km) and turn each into a coordinate.
-2. \`geolink_distance_matrix\` with the origin against all of them — one call,
+1. \`geolink_distance_matrix\` with the origin against all of them — one call,
    whatever the count, as long as it stays inside the cell limit.
-3. Keep the points whose \`duration_seconds\` is at or under the budget. Their
+1. Keep the points whose \`duration_seconds\` is at or under the budget. Their
    outline is the reachable shape, and it is rarely a circle: a river or a
    single bridge distorts it heavily, which is the entire point of computing it
    instead of drawing a radius.
 
 ## Territory assignment
 
-*"Which branch should own which customer?"*
+### "Which branch should own which customer?"
 
 \`geolink_distance_matrix\` with customers as origins and branches as
 destinations, \`nearest_only: true\`. One call returns the assignment. Grouping
@@ -305,31 +324,31 @@ line — those are the accounts a human would have assigned wrong.
 
 ## Underserved ground — site selection
 
-*"Where should the next branch go?"*
+### "Where should the next branch go?"
 
 1. Sweep the category you compete with across the region.
-2. Sweep a demand proxy across the same region with identical bounds and
+1. Sweep a demand proxy across the same region with identical bounds and
    spacing — schools, mosques, markets, whatever generates footfall for the
    business.
-3. Compare \`stats.by_district\` between the two. A district high in demand and
+1. Compare \`stats.by_district\` between the two. A district high in demand and
    low in supply is a candidate.
-4. Confirm with \`geolink_find_nearest\` from the candidate district's centre:
+1. Confirm with \`geolink_find_nearest\` from the candidate district's centre:
    if the closest existing competitor is a long drive, the gap is real.
 
 ## What is on the way
 
-*"Is there a pharmacy on my route?"*
+### "Is there a pharmacy on my route?"
 
 1. \`geolink_get_directions\` with \`route_detail: "waypoints"\` and a modest
    \`max_waypoints\`.
-2. Sample the path every few kilometres.
-3. \`geolink_search_places\` at each sample with a small \`limit\`.
-4. Confirm the candidates with \`geolink_distance_matrix\` from the origin —
+1. Sample the path every few kilometres.
+1. \`geolink_search_places\` at each sample with a small \`limit\`.
+1. Confirm the candidates with \`geolink_distance_matrix\` from the origin —
    a place 200 m from the line can still be a ten-minute detour.
 
 ## Confidence in a single address
 
-*"Did the geocoder understand me?"*
+### "Did the geocoder understand me?"
 
 \`geolink_geocode\` always returns one answer, and one answer never looks
 uncertain. To test it:
@@ -345,7 +364,7 @@ uncertain. To test it:
 
 ## Delivery reality check
 
-*"Is this address deliverable?"*
+### "Is this address deliverable?"
 
 Reverse-geocode the coordinates the customer gave, then compare the returned
 district with the one they typed. Mismatches are the addresses that fail on the
@@ -450,7 +469,9 @@ finding from one density is used to rule out behaviour at another.
 
 ---
 
-## 4. A floor mistaken for the edge of the world
+## 4. Twyman's Law — a surprising number is a measurement, not a discovery
+
+> Any figure that looks interesting or different is usually wrong.
 
 **What happened.** The search engine stopped after collecting six results. Every
 consumer built on top of it — the API, the MCP server, its tools — treated six
@@ -458,15 +479,25 @@ as what existed. It was a parameter: an internal "keep paging until you have at
 least six" floor, never a limit on the data. Asking for more returned 300.
 
 **Why here.** Scraped sources have internal pagination knobs that leak outward as
-apparent scarcity. The number that comes back is a function of what was asked
-for, and the ask is usually invisible.
+apparent scarcity, and the ask is usually invisible. The law cuts both ways, and
+the upward direction is easier to miss because a large number feels like success:
+a surprisingly *high* unique count usually means \`dedupe_meters\` was set too low
+or coordinate rounding stopped merging genuine duplicates, not that the district
+is unusually rich.
 
-**The check.** When a result count looks round, small, or suspiciously stable
-across very different queries, it is a parameter, not a property of the world.
-Find the knob before reasoning about the data.
+**Point it at your own instrument too.** The knob that produces a wrong number is
+as often on this side as on the source's. \`GEOLINK_SWEEP_MAX_POINTS\` defaults to
+200; an agent that hits it and reports "this area is too large to sweep" has just
+reproduced this exact failure using our own parameter instead of the upstream's.
+The area is not too large. The budget is 200 and it is tunable.
 
-**Passes when:** a low count has been re-tested with an explicitly larger request
-before it is reported as scarcity.
+**The check.** Any count that is round, suspiciously stable across different
+queries, or larger than the ground plausibly holds, gets traced to the parameter
+that produced it before it gets reported. Ask which knob could have manufactured
+this number — upstream, in the server, or in the analysis — and rule it out.
+
+**Passes when:** a surprising number in either direction has been re-run with the
+relevant parameter deliberately changed, and it survived.
 
 ---
 
@@ -633,7 +664,7 @@ The page size is 20. Depth is bought in units of 20, and the engine stops early
 the moment the area runs out, so asking for 100 in a place that holds 30 costs
 two requests, not five.
 
-## Measured, 2026-09-03, geolink-eg.com
+## Measured, 2026-09-03, against \`geolink-eg.com\`
 
 | Request | Results | Upstream requests | Wall clock |
 |---|---|---|---|
