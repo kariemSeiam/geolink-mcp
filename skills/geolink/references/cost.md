@@ -48,11 +48,11 @@ with a success response and no indication.
 
 Measured **through the API**, where the engine re-reads a page that looks
 terminal before accepting it, the same test returns a stable count every time.
-That is the correction working, and it is what `scripts/probe.mjs` watches: a
+That is the correction working, and it is what [probe.mjs](../scripts/probe.mjs) watches: a
 non-zero sparse rate at the API surface means the correction regressed.
 
 What the correction cannot protect is a *conclusion* drawn from one sparse call.
-See `tripwires.md` §1.
+See [tripwires.md](tripwires.md) §1.
 
 ## Planning rules that follow
 
