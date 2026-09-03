@@ -8,6 +8,7 @@ import {
   SWEEP_OUTBOUND_BUDGET,
   UPSTREAM_PAGE_SIZE,
 } from "./constants.js";
+import { EGYPT_GOVERNORATES } from "./data/governorates.js";
 import {
   MEASUREMENTS,
   PLAYBOOK_COST,
@@ -116,6 +117,23 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
           "geolink://playbook/recipes — compositions across several tools",
           "geolink://scale — the same measurements as structured data",
         ],
+      }),
+  );
+
+  server.registerResource(
+    "egypt-governorates",
+    "geolink://egypt/governorates",
+    {
+      title: "Egypt governorates",
+      description:
+        "The 27 governorates of Egypt in English and Arabic. Use a name as area={place: ...} in geolink_sweep_area, or match against address_parts.governorate values.",
+      mimeType: "application/json",
+    },
+    async (uri) =>
+      json(uri.href, {
+        count: EGYPT_GOVERNORATES.length,
+        governorates: EGYPT_GOVERNORATES,
+        note: "address_parts.governorate comes back in the language the request asked for, so match on whichever spelling the call used. A national sweep is 27 separate area sweeps, not one — quote the total with dry_run before running it.",
       }),
   );
 
