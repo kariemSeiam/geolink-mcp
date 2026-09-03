@@ -11,7 +11,7 @@ would have done.
 
 ## Row format
 
-```
+```text
 ## 2026-09-03 · pharmacies in Nasr City
 
 claim:        at least 412
@@ -54,6 +54,6 @@ sweep and a `pharmacy` sweep over identical bounds is a measurement of the
 index, not of the world, and it is worth knowing before quoting either.
 
 When a row's verdict turns out to have been wrong, that belongs in
-`references/tripwires.md` as a new entry, with what happened and the check that
+[tripwires.md](../references/tripwires.md) as a new entry, with what happened and the check that
 would have caught it. That is how this stops being a log and starts being a
 method.

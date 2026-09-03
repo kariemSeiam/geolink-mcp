@@ -31,8 +31,6 @@ determinism measurement taken on a dense query was generalised to all queries an
 used to reject a correct hypothesis. Each gate below exists because one of those
 shipped.
 
----
-
 ## Run the gates in order. Do not reorder them.
 
 The order matters. Most errors here come from choosing a method before
@@ -51,8 +49,6 @@ of changing it.
 
 Gate 5 and Gate 6 are not formalities. They are where every error listed above
 was eventually caught.
-
----
 
 ## Gate 1 — Shape
 
@@ -84,15 +80,15 @@ indication of how confident it is. Before building on a coordinate:
 - Pass coordinates rather than names wherever they are already known. It is the
   cheapest optimisation available and removes this whole class of doubt.
 
-Read `references/tripwires.md` §7 before using a geocoded area as a sweep
+Read [tripwires.md](references/tripwires.md) §7 before using a geocoded area as a sweep
 boundary. A viewport is not a border.
 
 ## Gate 3 — Budget
 
-Every tool's cost is a formula, and `references/cost.md` has all of them with
+Every tool's cost is a formula, and [cost.md](references/cost.md) has all of them with
 measured latency. The two that matter most:
 
-```
+```text
 search_places   ceil((limit + offset) / 20) requests
 sweep_area      grid_points × ceil(results_per_point / 20) requests
 ```
@@ -124,15 +120,9 @@ mistake available here.
 ## Gate 5 — Completeness
 
 This is the gate that separates a number from a defensible number. Open
-`references/coverage.md` and run its three tests:
-
-1. **Saturation** — did any cell return exactly what it was allowed to return?
-   Then the total is a floor. Say "at least".
-2. **Overlap** — `raw_results ÷ unique_results` near 1.0 means neighbouring
-   tiles never saw the same place, which means there was ground between them
-   that neither covered.
-3. **Edges** — reverse-geocode the corners of the area bounds. A district that
-   appears there but not in the results is ground the grid stopped short of.
+[coverage.md](references/coverage.md) and run its three tests — saturation,
+overlap, edges — with the arithmetic written out. They are there and not here so
+there is one copy to keep correct.
 
 A search rather than a sweep has a simpler test: `source_exhausted`. When it is
 `true`, the area genuinely has no more. When it is `false`, you stopped asking
@@ -140,18 +130,12 @@ first — say so rather than implying you found everything.
 
 ## Gate 6 — Tripwires
 
-Run every tripwire in `references/tripwires.md`. Ten failure modes, each with
-what happened, the check, and what passing looks like. Do not summarise them
-from memory — open the file.
+Run every tripwire in [tripwires.md](references/tripwires.md). Ten failure modes,
+each with what happened, the check, and what passing looks like.
 
-The three that recur most:
-
-- **Name-matching lies** (§2). Identity is coordinates. `الصيدلية` is dozens of
-  different pharmacies.
-- **A floor mistaken for the edge of the world** (§4). A small round number is
-  usually a parameter, not scarcity.
-- **Silence read as completion** (§10). Zero results deserves a second query
-  before it becomes "there are none".
+Do not summarise them from memory — open the file. Recalling "something about
+duplicates" is what let §2 through the first time; the check is specific and the
+specificity is the whole value.
 
 ## Gate 7 — Answer
 
@@ -166,8 +150,6 @@ answer trustworthy:
 For a count that failed a completeness test, "at least 340 pharmacies, and the
 downtown cells were saturated so the real number is higher" is a better answer
 than 340. It is also the answer that survives someone checking.
-
----
 
 ## Keeping this skill honest
 
@@ -185,16 +167,28 @@ When a gate catches something new, add a tripwire. When a coverage claim ships,
 add a ledger row with the count and how it was verified. A static version of this
 skill would be wrong within a quarter.
 
+## Size budget
+
+| File | Budget | When it is hit |
+|---|---|---|
+| `SKILL.md` | 200 lines | move the longest gate's detail into a reference file and leave the gate pointing at it |
+| each reference | 250 lines | split by failure mode or by tool, never by adding a second topic to an existing file |
+| `ledger/` rows | no limit | append-only; a row is never edited after its verdict is written |
+
+This file is loaded whenever a map question is asked, so its length is a cost
+paid on every one of them. Detail belongs in the references, which are loaded
+only when a gate points at them by name.
+
 ## Files
 
 | Path | What it holds |
 |---|---|
-| `references/tripwires.md` | the 10 failure modes + the check for each |
-| `references/coverage.md` | covering an area without leaving holes: spacing maths, the three tests |
-| `references/cost.md` | cost formulas, measured latency, planning rules |
-| `references/recipes.md` | compositions: reachability, territory, service gaps, on-the-way |
-| `scripts/probe.mjs` | re-measures every number in these files against the live API |
-| `ledger/` | coverage claims made, and how each was verified |
+| [references/tripwires.md](references/tripwires.md) | the 10 failure modes + the check for each |
+| [references/coverage.md](references/coverage.md) | covering an area without leaving holes: spacing maths, the three tests |
+| [references/cost.md](references/cost.md) | cost formulas, measured latency, planning rules |
+| [references/recipes.md](references/recipes.md) | compositions: reachability, territory, service gaps, on-the-way |
+| [scripts/probe.mjs](scripts/probe.mjs) | re-measures every number in these files against the live API |
+| [ledger/](ledger/) | coverage claims made, and how each was verified |
 
 The same content is served by the MCP server itself as resources —
 `geolink://playbook`, `geolink://playbook/coverage`, `geolink://playbook/recipes`,
