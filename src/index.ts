@@ -18,6 +18,31 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { loadConfig, type Config } from "./config.js";
+import { AuthStore, bearerFrom, resolveIssuer } from "./http/auth.js";
+import {
+  authorizationServerMetadata,
+  callbackUrl,
+  challengeHeader,
+  checkProtocolHeaders,
+  errorRedirect,
+  exchangeCode,
+  MCP_PATH,
+  parseAuthorizeQuery,
+  protectedResourceMetadata,
+  randomCode,
+  readBody,
+  redirectMatches,
+  resolveClientIdDocument,
+  SCOPE,
+  sendHtml,
+  sendJson,
+  sendUnauthorized,
+  SUPPORTED_PROTOCOL_VERSIONS,
+  validateUpstreamKey,
+  type ClientDescriptor,
+  type OAuthContext,
+} from "./http/oauth.js";
+import { connectPage, type PageLang } from "./http/pages.js";
 import { SERVER_NAME, SERVER_VERSION, SESSION_IDLE_TIMEOUT_MS, SESSION_REAP_INTERVAL_MS } from "./constants.js";
 import { registerPrompts } from "./prompts.js";
 import { registerResources } from "./resources.js";
@@ -95,6 +120,161 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return raw ? (JSON.parse(raw) as unknown) : undefined;
 }
 
+
+/** Where a person is sent to get a key, and what the consent page links to. */
+const SITE_URL = "https://geolink-eg.com";
+
+/**
+ * RFC 7591 dynamic client registration.
+ *
+ * Open by design — a client that has never spoken to this server has no other
+ * way to obtain a client_id. What that costs is a registry anyone can add to,
+ * which is why nothing here grants authority: a registration only records the
+ * redirect URIs that client may later use.
+ */
+async function handleRegister(req: IncomingMessage, res: ServerResponse, ctx: OAuthContext): Promise<void> {
+  let body: { redirect_uris?: unknown; client_name?: unknown; scope?: unknown };
+  try {
+    body = JSON.parse(await readBody(req)) as typeof body;
+  } catch {
+    sendJson(res, 400, { error: "invalid_client_metadata", error_description: "body must be JSON" });
+    return;
+  }
+  const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.filter((u): u is string => typeof u === "string") : [];
+  if (!uris.length) {
+    sendJson(res, 400, { error: "invalid_redirect_uri", error_description: "redirect_uris must contain at least one URI" });
+    return;
+  }
+  for (const uri of uris) {
+    try {
+      const parsed = new URL(uri);
+      const loopback = ["127.0.0.1", "localhost", "[::1]", "::1"].includes(parsed.hostname);
+      if (parsed.protocol === "http:" && !loopback) {
+        sendJson(res, 400, { error: "invalid_redirect_uri", error_description: `http is only allowed for loopback: ${uri}` });
+        return;
+      }
+    } catch {
+      sendJson(res, 400, { error: "invalid_redirect_uri", error_description: `not a valid URI: ${uri}` });
+      return;
+    }
+  }
+  const name = typeof body.client_name === "string" ? body.client_name : undefined;
+  const clientId = ctx.store.registerClient(uris, name);
+  // Registered metadata is echoed back, per RFC 7591.
+  sendJson(res, 201, {
+    client_id: clientId,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    redirect_uris: uris,
+    ...(name ? { client_name: name } : {}),
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+    scope: typeof body.scope === "string" ? body.scope : SCOPE,
+  });
+}
+
+/** GET renders the consent page; POST turns an entered key into a code. */
+async function handleAuthorize(req: IncomingMessage, res: ServerResponse, ctx: OAuthContext, url: URL): Promise<void> {
+  const params = req.method === "POST"
+    ? new URLSearchParams(await readBody(req).catch(() => ""))
+    : url.searchParams;
+
+  const parsed = parseAuthorizeQuery(params);
+  if (!parsed.ok) {
+    // Only redirect an error when the redirect target is one we trust; an
+    // unvalidated redirect_uri here is an open redirect wearing an error page.
+    const target = params.get("redirect_uri");
+    const client = target ? await describeClient(ctx, params.get("client_id") ?? "") : null;
+    if (target && client && client.redirectUris.some((u) => redirectMatches(u, target))) {
+      res.writeHead(302, { Location: errorRedirect(target, parsed.error, parsed.description, params.get("state") ?? undefined) }).end();
+    } else {
+      sendJson(res, 400, { error: parsed.error, error_description: parsed.description });
+    }
+    return;
+  }
+
+  const request = parsed.value;
+  const client = await describeClient(ctx, request.clientId);
+  if (!client || !client.redirectUris.some((u) => redirectMatches(u, request.redirectUri))) {
+    sendJson(res, 400, {
+      error: "invalid_request",
+      error_description: "redirect_uri is not registered for this client",
+    });
+    return;
+  }
+
+  const lang: PageLang = /^ar\b/i.test(String(req.headers["accept-language"] ?? "")) ? "ar" : "en";
+  const hidden: Record<string, string> = {
+    client_id: request.clientId,
+    redirect_uri: request.redirectUri,
+    response_type: "code",
+    code_challenge: request.codeChallenge,
+    code_challenge_method: "S256",
+    ...(request.state ? { state: request.state } : {}),
+    ...(request.scope ? { scope: request.scope } : {}),
+  };
+
+  if (req.method !== "POST") {
+    sendHtml(res, 200, connectPage({
+      lang, action: "/authorize", hidden,
+      // The document is self-asserted, so a person is shown the host it came
+      // from rather than the name it chose for itself.
+      clientName: client.displayHost || client.name,
+      registerUrl: ctx.registerUrl, siteUrl: ctx.siteUrl,
+    }));
+    return;
+  }
+
+  const apiKey = (params.get("api_key") ?? "").trim();
+  if (!apiKey) {
+    sendHtml(res, 400, connectPage({
+      lang, action: "/authorize", hidden, clientName: client.displayHost || client.name,
+      registerUrl: ctx.registerUrl, siteUrl: ctx.siteUrl,
+      error: lang === "ar" ? "لازم تدخل المفتاح." : "A key is required.",
+    }));
+    return;
+  }
+  // Checked here rather than at /token: the token endpoint runs inside a
+  // user-facing budget, and a slow upstream there becomes a failed connection
+  // instead of a message someone can act on.
+  if (!(await validateUpstreamKey(ctx.upstreamBaseUrl, apiKey))) {
+    sendHtml(res, 400, connectPage({
+      lang, action: "/authorize", hidden, clientName: client.displayHost || client.name,
+      registerUrl: ctx.registerUrl, siteUrl: ctx.siteUrl,
+      error: lang === "ar" ? "المفتاح ده مرفوض من GeoLink." : "GeoLink rejected that key.",
+    }));
+    return;
+  }
+
+  const code = randomCode();
+  ctx.store.issueCode(code, {
+    apiKey,
+    clientId: request.clientId,
+    redirectUri: request.redirectUri,
+    codeChallenge: request.codeChallenge,
+  });
+  res.writeHead(302, { Location: callbackUrl(ctx, request.redirectUri, code, request.state) }).end();
+}
+
+/** A registered client, or one identified by its metadata document. */
+async function describeClient(ctx: OAuthContext, clientId: string): Promise<ClientDescriptor | null> {
+  const registered = ctx.store.getClient(clientId);
+  if (registered) {
+    return { clientId, redirectUris: registered.redirectUris, name: registered.name, displayHost: registered.name ?? "" };
+  }
+  if (clientId.startsWith("https://")) return resolveClientIdDocument(clientId);
+  return null;
+}
+
+async function handleToken(req: IncomingMessage, res: ServerResponse, ctx: OAuthContext): Promise<void> {
+  // The token endpoint speaks form-urlencoded; a JSON-only parser answers 415
+  // here and the flow dies at the last step.
+  const form = new URLSearchParams(await readBody(req).catch(() => ""));
+  const result = exchangeCode(ctx, form);
+  if (result.ok) sendJson(res, 200, result.body);
+  else sendJson(res, result.status, result.body);
+}
+
 async function runHttp(cfg: Config): Promise<void> {
   // Stateful session map: sessionId -> { server, transport, lastSeen }.
   // Clients are supposed to DELETE when done, but a dropped connection or a
@@ -102,6 +282,10 @@ async function runHttp(cfg: Config): Promise<void> {
   // without it the map grows for the lifetime of the process.
   type Session = { server: McpServer; transport: StreamableHTTPServerTransport; lastSeen: number };
   const sessions = new Map<string, Session>();
+  // Tokens and authorization codes live for the life of the process. A restart
+  // asks clients to reconnect, which for a read-only service is a reconnect
+  // rather than a loss, and it keeps other people's API keys off this disk.
+  const authStore = new AuthStore();
 
   const touch = (sid: string | undefined): void => {
     if (!sid) return;
@@ -139,8 +323,9 @@ async function runHttp(cfg: Config): Promise<void> {
     // CORS preflight
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, MCP-Session-Id");
-    res.setHeader("Access-Control-Expose-Headers", "MCP-Session-Id");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, MCP-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name");
+    // A client cannot follow the challenge it cannot read.
+    res.setHeader("Access-Control-Expose-Headers", "MCP-Session-Id, WWW-Authenticate");
     if (req.method === "OPTIONS") { res.writeHead(204).end(); return; }
 
     if (url.pathname === "/healthz") {
@@ -149,11 +334,45 @@ async function runHttp(cfg: Config): Promise<void> {
       return;
     }
 
-    // No OAuth metadata is served on purpose. This server authenticates to
-    // GeoLink with its own key and has no authorization or token endpoint of
-    // its own; advertising discovery metadata pointing at routes that do not
-    // exist makes a client fail mid-handshake instead of falling back to
-    // connecting unauthenticated. Put a proxy in front of it for auth.
+    // Everything below this line up to /mcp must stay reachable without a
+    // token. A client discovers where to authenticate by reading these, so an
+    // auth check in front of them makes the flow impossible to start.
+    const oauth: OAuthContext = {
+      issuer: resolveIssuer(req, cfg.publicUrl),
+      store: authStore,
+      upstreamBaseUrl: cfg.baseUrl,
+      registerUrl: `${SITE_URL}/register`,
+      siteUrl: SITE_URL,
+    };
+
+    if (url.pathname === "/.well-known/oauth-protected-resource" ||
+        url.pathname === `/.well-known/oauth-protected-resource${MCP_PATH}`) {
+      sendJson(res, 200, protectedResourceMetadata(oauth));
+      return;
+    }
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      sendJson(res, 200, authorizationServerMetadata(oauth));
+      return;
+    }
+    if (url.pathname === "/register" && req.method === "POST") {
+      await handleRegister(req, res, oauth);
+      return;
+    }
+    if (url.pathname === "/authorize") {
+      await handleAuthorize(req, res, oauth, url);
+      return;
+    }
+    if (url.pathname === "/token" && req.method === "POST") {
+      await handleToken(req, res, oauth);
+      return;
+    }
+    if (url.pathname === "/revoke" && req.method === "POST") {
+      const form = new URLSearchParams(await readBody(req).catch(() => ""));
+      authStore.revoke(form.get("token") ?? "");
+      // RFC 7009: an unknown token is still a success.
+      res.writeHead(200).end();
+      return;
+    }
 
     if (url.pathname !== "/mcp") { res.writeHead(404).end(); return; }
 
@@ -168,7 +387,7 @@ async function runHttp(cfg: Config): Promise<void> {
           version: SERVER_VERSION,
           transport: "streamable-http",
           endpoint: `https://${req.headers.host}/mcp`,
-          protocol: "2024-11-05",
+          protocol: SUPPORTED_PROTOCOL_VERSIONS[SUPPORTED_PROTOCOL_VERSIONS.length - 1],
         }));
         return;
       }
@@ -198,13 +417,48 @@ async function runHttp(cfg: Config): Promise<void> {
 
     try {
       const body = await readJsonBody(req);
+
+      // The gate runs here, before the message reaches the MCP SDK. Once a
+      // tool handler runs, its result is already destined for a 200, and a 200
+      // carrying isError never prompts a client to authenticate — it just
+      // hands the text to the model. Authentication has to fail as transport,
+      // not as content.
+      const bearer = bearerFrom(req);
+      const requestKey = bearer ? authStore.resolveToken(bearer) : undefined;
+      if (!requestKey) {
+        console.error(`[${requestId}] 401 ${bearer ? "token not recognised" : "no bearer token"}`);
+        sendUnauthorized(res, {
+          issuer: resolveIssuer(req, cfg.publicUrl),
+          store: authStore,
+          upstreamBaseUrl: cfg.baseUrl,
+          registerUrl: `${SITE_URL}/register`,
+          siteUrl: SITE_URL,
+        });
+        return;
+      }
+
+      // Newer clients route on headers; older ones send none. Absence is fine
+      // either way, disagreement with the body is not.
+      const headerCheck = checkProtocolHeaders(req.headers, body);
+      if (!headerCheck.ok && headerCheck.error) {
+        sendJson(res, 400, {
+          jsonrpc: "2.0",
+          id: (body as { id?: unknown } | null)?.id ?? null,
+          error: headerCheck.error,
+        });
+        return;
+      }
+
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
       // Reuse existing session or create new one
       let entry: Session | undefined = sessionId ? sessions.get(sessionId) : undefined;
 
       if (!entry) {
-        const server = buildServer(cfg);
+        // The connection's own key, not the process's. This single argument is
+        // the whole data-plane change for multi-user: every upstream call
+        // reads cfg.apiKey, so binding it here binds the entire session.
+        const server = buildServer({ ...cfg, apiKey: requestKey });
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           enableJsonResponse: true,

@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.6.0] - 2026-09-03
+
+### Added
+- Remote clients can now connect by pasting a URL. The server is both the protected resource and its own authorization server: RFC 9728 protected-resource metadata (served at both the bare and path-inserted well-known locations), RFC 8414 authorization-server metadata, RFC 7591 dynamic client registration, client-ID metadata documents, PKCE S256, and RFC 7009 revocation.
+- A branded consent page collects the person's own GeoLink key and exchanges it for an opaque token bound to that key, so there is no shared credential the flow can hand out. The key is validated against GeoLink on the consent POST, never inside the token endpoint, which runs under a user-facing time budget.
+- `GEOLINK_PUBLIC_URL` sets the origin advertised in metadata when it cannot be inferred from forwarded headers.
+- `npm run test:oauth` walks the whole flow against a live server — discovery, registration, consent, PKCE exchange, an authenticated call, and revocation — with 31 assertions including replayed codes, wrong verifiers, and unregistered redirect URIs.
+
+### Changed
+- Over HTTP the upstream key is per connection rather than per process, so one deployment serves many people, each against their own GeoLink account. `GEOLINK_API_KEY` is consequently no longer required to start in HTTP mode. The stdio path is unchanged and still takes its key from the environment, as the specification intends for a local process.
+- Newer routing headers (`Mcp-Method`, `Mcp-Name`) are read and checked but never required: absence is fine, presence is fine, and only disagreement with the body is refused, with `-32020`. An unsupported `MCP-Protocol-Version` returns `-32022`.
+- CORS now allows `Authorization` and the protocol headers, and exposes `WWW-Authenticate` so a browser client can read the challenge it is meant to follow.
+- The GET discovery response no longer advertises a hardcoded, stale protocol version, and `server.json` declares the streamable-HTTP remote.
+
 ## [1.5.0] - 2026-09-03
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "geolink-mcp",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "MCP server for GeoLink (geolink-eg.com) \u2014 geocoding, place search, routing, distance matrix, nearest-branch ranking, and grid-based area coverage sweeps for AI agents.",
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,8 @@
   },
   "files": [
     "dist",
+    "!dist/tests",
+    "!dist/**/*.map",
     "skills",
     "README.md",
     "LICENSE",
@@ -23,7 +25,8 @@
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "clean": "rm -rf dist",
     "test:e2e": "npm run build && (node scripts/mock-geolink.mjs & MOCK=$!; sleep 0.6; node scripts/e2e.mjs; EC=$?; kill $MOCK; exit $EC)",
-    "smoke": "npm run build && bash scripts/smoke.sh"
+    "smoke": "npm run build && bash scripts/smoke.sh",
+    "test:oauth": "npm run build && bash scripts/oauth-flow.sh"
   },
   "keywords": [
     "mcp",
