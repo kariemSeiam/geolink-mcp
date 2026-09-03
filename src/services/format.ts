@@ -16,17 +16,35 @@ export function ok<T extends object>(structured: T, text: string): CallToolResul
   };
 }
 
+/**
+ * Failures are prose with a fixed, parseable first line.
+ *
+ * A structured error payload would be better, and does not work: the SDK
+ * validates `structuredContent` against the tool's declared `outputSchema`
+ * whether or not `isError` is set, so an error object on that channel makes a
+ * conforming client reject the response outright. Every tool's output schema
+ * would have to become a union of success-or-error to allow it.
+ *
+ * So the contract is the text, and it is stable on purpose:
+ *
+ *     Error (<kind>): <what happened>
+ *     Next step: <the parameter change that fixes it>
+ *
+ * `<kind>` is one of the ErrorKind values and is what an agent should branch
+ * on. It is first, single-token, and never localised.
+ */
 export function fail(err: unknown): CallToolResult {
   let text: string;
   if (err instanceof GeoLinkError) {
-    text = `Error (${err.kind}): ${err.message}\nNext step: ${err.hint}`;
+    const retryable = err.kind === "timeout" || err.kind === "network" || err.kind === "upstream";
+    text = `Error (${err.kind}): ${err.message}\nNext step: ${err.hint}${retryable ? "\nRetryable: yes — this one is worth calling again." : ""}`;
   } else if (err instanceof z.ZodError) {
     const issues = err.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
-    text = `Error (validation): ${issues}`;
+    text = `Error (validation): ${issues}\nNext step: correct the named parameters and call again.`;
   } else if (err instanceof Error) {
-    text = `Error: ${err.message}`;
+    text = `Error (unknown): ${err.message}`;
   } else {
-    text = `Error: ${String(err)}`;
+    text = `Error (unknown): ${String(err)}`;
   }
   return { isError: true, content: [{ type: "text", text }] };
 }

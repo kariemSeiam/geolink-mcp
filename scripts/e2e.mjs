@@ -35,6 +35,7 @@ let x = await call("geolink_geocode", { query: "Cairo Tower", language: "en" });
 check("geocode returns place with bounds", x.sc?.name === "Cairo Tower" && x.sc?.bounds?.northeast?.lat > x.sc?.bounds?.southwest?.lat, x.text.slice(0, 80));
 x = await call("geolink_geocode", { query: "nowhere" });
 check("geocode not_found → isError with hint", x.r.isError && /not_found/.test(x.text) && /Next step/.test(x.text), x.text);
+check("error first line is a stable parseable contract", /^Error \((auth|quota|not_found|bad_request|timeout|network|upstream|validation|unknown)\): /.test(x.text), x.text.split("\n")[0]);
 x = await call("geolink_reverse_geocode", { latitude: 30.0459, longitude: 31.2243, response_format: "json" });
 check("reverse geocode json", x.sc?.address_parts?.district === "Zamalek");
 
