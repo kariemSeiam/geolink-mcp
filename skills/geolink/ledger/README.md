@@ -44,6 +44,14 @@ usually a row where nobody looked.
 | cost | so the next person can budget before asking |
 | saturation, overlap, edges | the three completeness tests, with their arithmetic |
 | verdict | what the number excludes |
+| tripwire dispositions | for each of the ten: applied, not-applicable (with the reason), or transferred |
+
+**Transferred** is the disposition that makes this worth recording. Tripwire §1
+is partly discharged by the server, which re-reads a page that looks terminal
+before accepting it — an agent that relies on that has not skipped the tripwire,
+it has delegated it. Without the distinction, a skipped check and a delegated one
+look identical in the ledger, and the first person to inherit a wrong number
+cannot tell which happened.
 
 ## Why this improves the answers rather than just recording them
 

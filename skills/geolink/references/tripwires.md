@@ -77,7 +77,9 @@ finding from one density is used to rule out behaviour at another.
 
 ---
 
-## 4. A floor mistaken for the edge of the world
+## 4. Twyman's Law — a surprising number is a measurement, not a discovery
+
+> Any figure that looks interesting or different is usually wrong.
 
 **What happened.** The search engine stopped after collecting six results. Every
 consumer built on top of it — the API, the MCP server, its tools — treated six
@@ -85,15 +87,25 @@ as what existed. It was a parameter: an internal "keep paging until you have at
 least six" floor, never a limit on the data. Asking for more returned 300.
 
 **Why here.** Scraped sources have internal pagination knobs that leak outward as
-apparent scarcity. The number that comes back is a function of what was asked
-for, and the ask is usually invisible.
+apparent scarcity, and the ask is usually invisible. The law cuts both ways, and
+the upward direction is easier to miss because a large number feels like success:
+a surprisingly *high* unique count usually means `dedupe_meters` was set too low
+or coordinate rounding stopped merging genuine duplicates, not that the district
+is unusually rich.
 
-**The check.** When a result count looks round, small, or suspiciously stable
-across very different queries, it is a parameter, not a property of the world.
-Find the knob before reasoning about the data.
+**Point it at your own instrument too.** The knob that produces a wrong number is
+as often on this side as on the source's. `GEOLINK_SWEEP_MAX_POINTS` defaults to
+200; an agent that hits it and reports "this area is too large to sweep" has just
+reproduced this exact failure using our own parameter instead of the upstream's.
+The area is not too large. The budget is 200 and it is tunable.
 
-**Passes when:** a low count has been re-tested with an explicitly larger request
-before it is reported as scarcity.
+**The check.** Any count that is round, suspiciously stable across different
+queries, or larger than the ground plausibly holds, gets traced to the parameter
+that produced it before it gets reported. Ask which knob could have manufactured
+this number — upstream, in the server, or in the analysis — and rule it out.
+
+**Passes when:** a surprising number in either direction has been re-run with the
+relevant parameter deliberately changed, and it survived.
 
 ---
 
