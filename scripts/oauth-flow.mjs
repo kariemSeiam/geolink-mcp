@@ -29,15 +29,17 @@ ok("AS issuer matches PRM authorization_servers[0]", as?.issuer === prm?.authori
 ok("AS advertises S256 (absence = clients refuse)", as?.code_challenge_methods_supported?.includes("S256"));
 ok("AS advertises public clients", as?.token_endpoint_auth_methods_supported?.includes("none"));
 ok("AS advertises CIMD", as?.client_id_metadata_document_supported === true);
+ok("AS endpoints are namespaced under the mount path", as?.registration_endpoint === `${BASE}/mcp/register` && as?.token_endpoint === `${BASE}/mcp/token`, as?.registration_endpoint);
+ok("well-known documents stay at the root", prm?.resource === `${BASE}/mcp` && as?.issuer === BASE);
 
 // 3. Dynamic client registration.
-r = await fetch(`${BASE}/register`, { method: "POST", headers: { "Content-Type": "application/json" },
+r = await fetch(`${BASE}/mcp/register`, { method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ redirect_uris: ["http://127.0.0.1:9911/cb"], client_name: "Test Client" }) });
 const reg = await j(r);
 ok("register -> 201 with a client_id", r.status === 201 && typeof reg?.client_id === "string", reg?.client_id);
 ok("register echoes the redirect_uris", reg?.redirect_uris?.[0] === "http://127.0.0.1:9911/cb");
 
-r = await fetch(`${BASE}/register`, { method: "POST", headers: { "Content-Type": "application/json" },
+r = await fetch(`${BASE}/mcp/register`, { method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ redirect_uris: ["https://evil.example/cb"], client_name: "x" }) });
 const regHttps = await j(r);
 ok("register accepts an https redirect for a real client", r.status === 201, `status=${r.status}`);
@@ -47,26 +49,26 @@ const verifier = randomBytes(32).toString("base64url");
 const challenge = createHash("sha256").update(verifier).digest("base64url");
 const q = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9911/cb",
   response_type: "code", code_challenge: challenge, code_challenge_method: "S256", state: "st-123" });
-r = await fetch(`${BASE}/authorize?${q}`, { redirect: "manual" });
+r = await fetch(`${BASE}/mcp/authorize?${q}`, { redirect: "manual" });
 const html = await r.text();
 ok("authorize renders the consent page", r.status === 200 && /Connect GeoLink/.test(html), `status=${r.status}`);
 ok("consent page cannot be framed", r.headers.get("x-frame-options") === "DENY" && /frame-ancestors 'none'/.test(r.headers.get("content-security-policy") ?? ""));
 
 // 5. Missing PKCE must be refused.
 const noPkce = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9911/cb", response_type: "code" });
-r = await fetch(`${BASE}/authorize?${noPkce}`, { redirect: "manual" });
+r = await fetch(`${BASE}/mcp/authorize?${noPkce}`, { redirect: "manual" });
 ok("authorize without PKCE is refused", r.status === 302 || r.status === 400, `status=${r.status}`);
 
 // 6. An unregistered redirect must be refused.
 const badRedir = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "https://evil.example/cb",
   response_type: "code", code_challenge: challenge, code_challenge_method: "S256" });
-r = await fetch(`${BASE}/authorize?${badRedir}`, { redirect: "manual" });
+r = await fetch(`${BASE}/mcp/authorize?${badRedir}`, { redirect: "manual" });
 ok("unregistered redirect_uri is refused", r.status === 400, `status=${r.status}`);
 
 // 7. Consent POST -> code, carrying iss.
 const form = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9911/cb",
   response_type: "code", code_challenge: challenge, code_challenge_method: "S256", state: "st-123", api_key: "test-key" });
-r = await fetch(`${BASE}/authorize`, { method: "POST", redirect: "manual",
+r = await fetch(`${BASE}/mcp/authorize`, { method: "POST", redirect: "manual",
   headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form });
 const loc = new URL(r.headers.get("location") ?? "http://x/");
 ok("consent POST redirects with a code", r.status === 302 && loc.searchParams.has("code"), `status=${r.status}`);
@@ -75,7 +77,7 @@ ok("iss is appended (redirect leaves from the POST)", loc.searchParams.get("iss"
 const code = loc.searchParams.get("code");
 
 // 8. Token exchange with PKCE.
-r = await fetch(`${BASE}/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+r = await fetch(`${BASE}/mcp/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
   body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier,
     redirect_uri: "http://127.0.0.1:9911/cb", client_id: reg.client_id }) });
 const tok = await j(r);
@@ -83,16 +85,16 @@ ok("token endpoint accepts form-urlencoded", r.status === 200, `status=${r.statu
 ok("token response is a Bearer token", tok?.token_type === "Bearer" && typeof tok?.access_token === "string");
 
 // 9. The code is single use.
-r = await fetch(`${BASE}/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+r = await fetch(`${BASE}/mcp/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
   body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: reg.client_id }) });
 ok("replayed code is refused", r.status === 400, `status=${r.status}`);
 
 // 10. A wrong verifier must fail.
 const f2 = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9911/cb", response_type: "code",
   code_challenge: challenge, code_challenge_method: "S256", api_key: "test-key" });
-r = await fetch(`${BASE}/authorize`, { method: "POST", redirect: "manual", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: f2 });
+r = await fetch(`${BASE}/mcp/authorize`, { method: "POST", redirect: "manual", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: f2 });
 const code2 = new URL(r.headers.get("location")).searchParams.get("code");
-r = await fetch(`${BASE}/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+r = await fetch(`${BASE}/mcp/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
   body: new URLSearchParams({ grant_type: "authorization_code", code: code2, code_verifier: "wrong-verifier", client_id: reg.client_id }) });
 ok("wrong code_verifier is refused", r.status === 400, (await j(r))?.error);
 
@@ -119,7 +121,7 @@ const badVer = await call({ "MCP-Protocol-Version": "1999-01-01" });
 ok("unknown protocol version -> -32022", badVer.status === 400 && (await j(badVer))?.error?.code === -32022);
 
 // 13. Revocation.
-await fetch(`${BASE}/revoke`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+await fetch(`${BASE}/mcp/revoke`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
   body: new URLSearchParams({ token: tok.access_token }) });
 r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok.access_token}` },
   body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }) });
