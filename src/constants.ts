@@ -1,5 +1,5 @@
 export const SERVER_NAME = "geolink-mcp";
-export const SERVER_VERSION = "1.1.0";
+export const SERVER_VERSION = "1.2.0";
 
 export const DEFAULT_BASE_URL = "https://www.geolink-eg.com";
 export const DEFAULT_LANGUAGE = "en";
@@ -17,11 +17,13 @@ export const CHARACTER_LIMIT = 25_000;
 export const UPSTREAM_PAGE_SIZE = 20;
 
 /**
- * Depth ceiling this server will request from a single place search. Depth
- * costs upstream requests (`ceil(max_results / UPSTREAM_PAGE_SIZE)` of them),
- * so tools ask for what the caller actually needs rather than the maximum.
+ * Depth past which a single place search is worth a second thought — not a
+ * limit. Nothing refuses a larger number; the search simply costs one upstream
+ * request per {@link UPSTREAM_PAGE_SIZE} results and stops early when the area
+ * runs out. Tools quote this in their docs so an agent can size a request
+ * against its cost instead of guessing.
  */
-export const MAX_SEARCH_DEPTH = 200;
+export const DEEP_SEARCH_ADVISORY = 200;
 
 /** Kilometres per degree of latitude (constant); longitude scales with cos(lat). */
 export const KM_PER_DEG_LAT = 111.32;

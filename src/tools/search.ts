@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { MAX_SEARCH_DEPTH, UPSTREAM_PAGE_SIZE } from "../constants.js";
+import { DEEP_SEARCH_ADVISORY, UPSTREAM_PAGE_SIZE } from "../constants.js";
 import { fitToLimit, guarded, ok, paginate, placeMarkdown } from "../services/format.js";
 import { haversineKm, round } from "../services/geo.js";
 import {
@@ -35,10 +35,9 @@ export function registerSearchTools(server: McpServer, ctx: ToolContext): void {
       .number()
       .int()
       .min(1)
-      .max(MAX_SEARCH_DEPTH)
       .default(UPSTREAM_PAGE_SIZE)
       .describe(
-        `Max places to return (default ${UPSTREAM_PAGE_SIZE}). The search goes as deep as limit+offset needs, one upstream request per ${UPSTREAM_PAGE_SIZE} results, stopping early when the area runs out. Ask for what you need: depth costs calls and latency.`,
+        `Max places to return (default ${UPSTREAM_PAGE_SIZE}). No ceiling — the search goes as deep as limit+offset needs, one upstream request per ${UPSTREAM_PAGE_SIZE} results, and stops early the moment the area runs out. Past ~${DEEP_SEARCH_ADVISORY} in one call, a grid sweep usually returns more for the same cost, because depth re-reads one center while a sweep reads new ground.`,
       ),
     offset: z.number().int().min(0).default(0).describe("Skip this many results (pagination). Counted within one call's result set."),
     sort_by_distance: z
@@ -73,7 +72,7 @@ Depth is what you ask for: the search pages the source until it has \`limit\` re
 Args:
   - query (string): Category, brand, or place name. "pharmacy", "كافيه", "Carrefour".
   - near (string | {lat,lng}, optional): Search center as "lat,lng" or a place name (geocoded, cached). Use it for anything local.
-  - limit (1-${MAX_SEARCH_DEPTH}, default ${UPSTREAM_PAGE_SIZE}), offset (default 0): How many to return, and how many to skip.
+  - limit (≥1, default ${UPSTREAM_PAGE_SIZE}, no ceiling), offset (default 0): How many to return, and how many to skip.
   - sort_by_distance (bool, default true): With near, order by straight-line distance and add distance_km.
   - language, country: Defaults "en" / none.
   - response_format ('markdown' | 'json').
@@ -107,7 +106,7 @@ Errors: not_found when nothing matches; try a broader query or a different langu
       const center = args.near !== undefined ? await resolveLocation(ctx, args.near, lang, country) : undefined;
       // Fetch exactly the depth this page of results needs — the upstream
       // stops early on its own when the area has fewer places than asked for.
-      const depth = Math.min(MAX_SEARCH_DEPTH, args.offset + args.limit);
+      const depth = args.offset + args.limit;
       const found = await ctx.client.textSearch(args.query, center, lang, country, depth);
 
       let places: PlaceWithDistance[] = found;
