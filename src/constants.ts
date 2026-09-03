@@ -70,3 +70,8 @@ export const ENDPOINTS = {
 export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 /** How often idle sessions are swept. */
 export const SESSION_REAP_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Retries for transient upstream failures (timeout, network, 5xx) only. */
+export const MAX_RETRIES = 2;
+/** First backoff step; doubles per attempt, with jitter added on top. */
+export const RETRY_BASE_MS = 300;
