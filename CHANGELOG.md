@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.3.0] - 2026-09-03
+
+### Added
+- `skills/geolink/` — the method, shipped with the package: seven gates from a map question to a defensible answer, ten tripwires each traced to an incident that actually happened, the coverage tests, the cost model, and the compositions. Every number in it is re-derivable by `scripts/probe.mjs`, which re-measures the live API and flags anything that has drifted from what the files claim.
+- `ledger/` — coverage claims recorded with the arithmetic that verified them, so the next person asking the same question starts from a number with a method attached.
+- Four more resources: `geolink://method` (the gates), `geolink://playbook/tripwires`, `geolink://playbook/cost`, alongside the existing playbook documents.
+
+### Changed
+- The playbook resources are now generated from the skill files at build time rather than maintained separately. A test asserts the served text is byte-identical to the file on disk, so the protocol copy and the file copy cannot diverge.
+- The published package includes `skills/`, so installing from npm brings the method with the server.
+
 ## [1.2.0] - 2026-09-03
 
 ### Added

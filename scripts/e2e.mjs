@@ -77,6 +77,13 @@ x = await call("geolink_sweep_area", { query: "pharmacy", area: { center: "Cairo
 check("sweep executes, clips far result, dedupes Alpha", x.sc?.stats.api_calls_made === x.sc?.plan.grid_points && x.sc.stats.after_clip < x.sc.stats.raw_results && x.sc.stats.unique_results < x.sc.stats.after_clip, JSON.stringify(x.sc?.stats));
 check("sweep stats grouped by district", Object.keys(x.sc?.stats.by_district ?? {}).length >= 2 && !("Elsewhere" in x.sc.stats.by_district));
 check("sweep fields trimmed + paginated", x.sc?.places.length === 5 && Object.keys(x.sc.places[0]).sort().join(",") === "location,name" && x.sc.has_more === true);
+const { readFileSync } = await import("node:fs");
+const tw = await client.readResource({ uri: "geolink://playbook/tripwires" });
+const onDisk = readFileSync(new URL("../skills/geolink/references/tripwires.md", import.meta.url), "utf8");
+check("served tripwires are byte-identical to the skill file", tw.contents[0].text === onDisk, `resource ${tw.contents[0].text.length} chars vs file ${onDisk.length}`);
+const method = await client.readResource({ uri: "geolink://method" });
+check("method resource carries the gates in order", /Gate 1 — Shape/.test(method.contents[0].text) && /Gate 6 — Tripwires/.test(method.contents[0].text));
+
 const pb = await client.readResource({ uri: "geolink://playbook" });
 check("playbook is readable markdown and states depth is not coverage", pb.contents[0].mimeType === "text/markdown" && /Depth is not coverage/.test(pb.contents[0].text), pb.contents[0].mimeType);
 const sc = JSON.parse((await client.readResource({ uri: "geolink://scale" })).contents[0].text);
