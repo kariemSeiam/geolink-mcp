@@ -103,6 +103,12 @@ const firstCalls = x.sc?.stats?.api_calls_made;
 x = await call("geolink_sweep_area", { query: "cafe", area: { place: "Giza" }, grid_spacing_km: 8, response_format: "json", limit: 1 });
 check("geocodes are cached across calls, not re-paid", x.sc?.stats?.api_calls_made <= firstCalls, `first=${firstCalls} second=${x.sc?.stats?.api_calls_made}`);
 
+x = await call("geolink_geocode", { query: "Cairo Tower", response_format: "json" });
+check("geocode reports whether its point sits in its own viewport", typeof x.sc?.location_within_bounds === "boolean", `within=${x.sc?.location_within_bounds}`);
+x = await call("geolink_find_nearest", { origin: "30.00,31.20", candidates: ["30.05,31.20", "30.10,31.20"], response_format: "json" });
+check("find_nearest reports implied speed per candidate", (x.sc?.results ?? []).every((r) => typeof r.implied_speed_kmh === "number"), (x.sc?.results ?? []).map((r) => r.implied_speed_kmh).join(", "));
+check("plausible speeds raise no warning", !x.sc?.warning, x.sc?.warning ?? "(none)");
+
 const pb = await client.readResource({ uri: "geolink://playbook" });
 check("playbook is readable markdown and states depth is not coverage", pb.contents[0].mimeType === "text/markdown" && /Depth is not coverage/.test(pb.contents[0].text), pb.contents[0].mimeType);
 const sc = JSON.parse((await client.readResource({ uri: "geolink://scale" })).contents[0].text);

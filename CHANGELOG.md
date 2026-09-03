@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.5.0] - 2026-09-03
+
+### Added
+- Every leg now reports `implied_speed_kmh`, and a speed outside 1-180 km/h marks the entry `unreliable_pairing` alongside the existing straight-line check. A distance can be self-consistent and still carry the wrong duration; this is the tell.
+- `geolink_geocode` reports `location_within_bounds`. A point outside its own viewport is a fallback to a larger place rather than a match, and nothing else in the response said so.
+
+### Fixed
+- The geocode cache is process-wide instead of per session. In HTTP mode a server is built per session, so ten sessions asking about the same city paid the upstream ten times and the cache never did its job. Cache keys carry the base URL, so a staging client cannot be served a production entry.
+
 ## [1.4.0] - 2026-09-03
 
 ### Fixed

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { UPSTREAM_PAGE_SIZE } from "../constants.js";
 import { GeoLinkError } from "../services/client.js";
 import { cellText, fitToLimit, guarded, ok, routeMarkdown } from "../services/format.js";
-import { encodePolyline, formatLatLng, haversineKm, round, samplePoints } from "../services/geo.js";
+import { encodePolyline, formatLatLng, haversineKm, impliedSpeedKmh, PLAUSIBLE_SPEED_KMH, round, samplePoints } from "../services/geo.js";
 import {
   countryParam,
   languageParam,
@@ -353,6 +353,7 @@ Examples:
     location: z.object({ lat: z.number(), lng: z.number() }),
     place: PlaceSchema.optional(),
     straight_line_km: z.number(),
+    implied_speed_kmh: z.number().optional(),
     unreliable_pairing: z.boolean().optional(),
     distance_meters: z.number(),
     distance_text: z.string(),
@@ -494,7 +495,12 @@ Examples:
           // A road route cannot be shorter than the straight line between its
           // own endpoints. If it is, this cell belongs to a different place,
           // and reporting it would answer the question with the wrong branch.
-          const impossible = cell.distance_meters > 0 && straightLineKm > 0 && cell.distance_meters < straightLineKm * 1000 * 0.98;
+          const shorterThanStraightLine = cell.distance_meters > 0 && straightLineKm > 0 && cell.distance_meters < straightLineKm * 1000 * 0.98;
+          // A distance can be self-consistent and still carry the wrong
+          // duration; the tell is a speed nobody drives.
+          const speed = impliedSpeedKmh(cell.distance_meters, cell.duration_seconds);
+          const impossibleSpeed = speed !== null && (speed > PLAUSIBLE_SPEED_KMH.max || speed < PLAUSIBLE_SPEED_KMH.min);
+          const impossible = shorterThanStraightLine || impossibleSpeed;
           if (impossible) mismatched += 1;
           return {
             candidate_index: i,
@@ -503,6 +509,7 @@ Examples:
             ...(place ? { place } : {}),
             straight_line_km: straightLineKm,
             ...cell,
+            ...(speed !== null ? { implied_speed_kmh: round(speed, 1) } : {}),
             ...(impossible ? { unreliable_pairing: true } : {}),
             is_geolink_nearest: i === geolinkNearest,
           };
@@ -525,7 +532,7 @@ Examples:
         results: ranked,
         ...(mismatched > 0
           ? {
-              warning: `${mismatched} candidate(s) came back with a road distance shorter than their own straight-line distance, which is not physically possible and means the upstream's cells could not be matched to these places reliably. Those entries carry unreliable_pairing; treat their ranking as unverified and re-check with geolink_get_directions for the specific pair.`,
+              warning: `${mismatched} candidate(s) failed a physical check — a road distance shorter than their own straight line, or an implied speed outside ${PLAUSIBLE_SPEED_KMH.min}-${PLAUSIBLE_SPEED_KMH.max} km/h. Either means the upstream's numbers could not be matched to these places reliably. Those entries carry unreliable_pairing; treat their ranking as unverified and re-check the specific pair with geolink_get_directions.`,
             }
           : {}),
       };
