@@ -8,7 +8,15 @@ import {
   SWEEP_OUTBOUND_BUDGET,
   UPSTREAM_PAGE_SIZE,
 } from "./constants.js";
-import { MEASUREMENTS, PLAYBOOK_COVERAGE, PLAYBOOK_INDEX, PLAYBOOK_RECIPES } from "./playbook.js";
+import {
+  MEASUREMENTS,
+  PLAYBOOK_COST,
+  PLAYBOOK_COVERAGE,
+  PLAYBOOK_INDEX,
+  PLAYBOOK_RECIPES,
+  PLAYBOOK_TRIPWIRES,
+  SKILL_OVERVIEW,
+} from "./playbook.js";
 import type { ToolContext } from "./services/resolve.js";
 
 function json(uri: string, body: unknown): { contents: { uri: string; mimeType: string; text: string }[] } {
@@ -100,10 +108,13 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
           upstream: "upstream error or malformed payload — retry shortly",
         },
         reading_order: [
+          "geolink://method — the seven gates from question to defensible answer, in order",
           "geolink://playbook — which tool answers which question, and the depth-versus-coverage distinction",
-          "geolink://scale — measured latency and the partial-response behaviour",
+          "geolink://playbook/tripwires — the ten ways an answer comes back confidently wrong, each with its check",
           "geolink://playbook/coverage — covering a region without leaving holes",
+          "geolink://playbook/cost — cost formulas and measured latency",
           "geolink://playbook/recipes — compositions across several tools",
+          "geolink://scale — the same measurements as structured data",
         ],
       }),
   );
@@ -137,6 +148,9 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
     ["playbook", "geolink://playbook", "Playbook — choosing and combining the tools", PLAYBOOK_INDEX],
     ["playbook-coverage", "geolink://playbook/coverage", "Covering an area without leaving holes", PLAYBOOK_COVERAGE],
     ["playbook-recipes", "geolink://playbook/recipes", "Compositions across several tools", PLAYBOOK_RECIPES],
+    ["playbook-tripwires", "geolink://playbook/tripwires", "The ten ways a map answer comes back confidently wrong", PLAYBOOK_TRIPWIRES],
+    ["playbook-cost", "geolink://playbook/cost", "Cost formulas, measured latency, and the planning rules that follow", PLAYBOOK_COST],
+    ["method", "geolink://method", "The seven gates, in the order they have to run", SKILL_OVERVIEW],
   ];
 
   for (const [name, uri, title, body] of playbooks) {

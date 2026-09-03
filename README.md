@@ -307,6 +307,33 @@ bash scripts/smoke.sh  # HTTP transport, auth-failure path, startup validation, 
 
 `scripts/mock-geolink.mjs` mirrors the documented response shapes — including deliberately swapped bounds and an out-of-area result — so the full test suite runs offline, deterministically, in CI.
 
+## 🧭 The method
+
+The tool list tells a client what exists. It does not tell it that a large
+`limit` reads one center more deeply while a sweep reads new ground, that a grid
+cell returning exactly its limit is a floor rather than a total, or that a
+geocoded viewport is a display rectangle and not a boundary. That knowledge
+decides whether an answer is right, and it lives in [`skills/geolink/`](skills/geolink/):
+
+| Path | What it holds |
+|---|---|
+| [`SKILL.md`](skills/geolink/SKILL.md) | seven gates from a map question to a defensible answer, in the order they have to run |
+| [`references/tripwires.md`](skills/geolink/references/tripwires.md) | the ten ways an answer comes back confidently wrong — each with what happened, the check, and what passing looks like |
+| [`references/coverage.md`](skills/geolink/references/coverage.md) | spacing maths and the three tests for whether an area was actually covered |
+| [`references/cost.md`](skills/geolink/references/cost.md) | cost formulas and measured latency |
+| [`references/recipes.md`](skills/geolink/references/recipes.md) | compositions: reachability, territory, service gaps, on-the-way |
+| [`scripts/probe.mjs`](skills/geolink/scripts/probe.mjs) | re-measures every number in those files against the live API and flags drift |
+| [`ledger/`](skills/geolink/ledger/) | coverage claims made, and how each was verified |
+
+Nothing in there is asserted from intuition. Every tripwire is an incident that
+happened, and every figure is re-derivable by running the probe — because a
+reference whose numbers rot is worse than none, the rot being invisible.
+
+**The server serves the same files as resources**, generated from them at build
+time, so a chat model or a harness with no filesystem reads exactly what an IDE
+agent reads. A test asserts the served text is byte-identical to the file on
+disk; the two cannot drift apart without CI failing.
+
 ## 🧬 Extending
 
 GeoLink occasionally adds fields (website, phone, category, rating…) or raises per-query result counts. There are exactly **four** places to touch:
