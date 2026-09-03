@@ -9,6 +9,27 @@ export function round(n: number, decimals = 6): number {
   return Math.round(n * f) / f;
 }
 
+/**
+ * Implied average speed for a leg, in km/h, or null when it cannot be computed.
+ *
+ * The companion to the straight-line check. A distance can be self-consistent
+ * and still be paired with the wrong duration, and the tell is a speed no
+ * vehicle achieves on the ground being described. Cheap, physical, and it
+ * catches a unit error as readily as a mismatch.
+ */
+export function impliedSpeedKmh(distanceMeters: number, durationSeconds: number): number | null {
+  if (!(distanceMeters > 0) || !(durationSeconds > 0)) return null;
+  return (distanceMeters / 1000) / (durationSeconds / 3600);
+}
+
+/**
+ * Speeds outside this band are not journeys anyone takes by road. The ceiling
+ * sits above motorway traffic and well below anything a data error produces;
+ * the floor is slower than walking, which is what a duration attached to the
+ * wrong distance tends to look like.
+ */
+export const PLAUSIBLE_SPEED_KMH = { min: 1, max: 180 } as const;
+
 /** Great-circle distance in kilometres. */
 export function haversineKm(a: LatLng, b: LatLng): number {
   const dLat = toRad(b.lat - a.lat);

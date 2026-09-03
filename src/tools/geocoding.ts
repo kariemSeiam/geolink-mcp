@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { guarded, ok, placeMarkdown } from "../services/format.js";
+import { inBounds } from "../services/geo.js";
 import {
   countryParam,
   languageParam,
@@ -60,17 +61,35 @@ Examples:
 
 Errors: not_found if nothing matches — try adding the district/governorate or switching language.`,
       inputSchema: GeocodeShape,
-      outputSchema: PlaceSchema.shape,
+      outputSchema: {
+        ...PlaceSchema.shape,
+        location_within_bounds: z.boolean().optional(),
+        warning: z.string().optional(),
+      },
       annotations: READ_ONLY,
     },
     guarded(async (raw: z.infer<typeof GeocodeInput>) => {
       const args = GeocodeInput.parse(raw);
       const place = await ctx.client.geocode(args.query, pickLang(ctx, args.language), pickCountry(ctx, args.country));
+      // A result whose own point sits outside its own viewport is not a match,
+      // it is a fallback to something larger — a city standing in for a street
+      // the geocoder could not find. Nothing else in the response says so.
+      const consistent = place.bounds ? inBounds(place.location, place.bounds) : true;
+      const result = {
+        ...place,
+        ...(place.bounds ? { location_within_bounds: consistent } : {}),
+        ...(consistent
+          ? {}
+          : {
+              warning:
+                "The returned point falls outside the returned viewport, which usually means the geocoder fell back to a larger place rather than matching what was asked for. Confirm with geolink_search_places before building on this coordinate.",
+            }),
+      };
       const text =
         args.response_format === ResponseFormat.JSON
-          ? JSON.stringify(place, null, 2)
-          : `# Geocode: "${args.query}"\n\n${placeMarkdown(place)}`;
-      return ok(place, text);
+          ? JSON.stringify(result, null, 2)
+          : `# Geocode: "${args.query}"\n\n${placeMarkdown(place)}${consistent ? "" : "\n\n_Point falls outside its own viewport — likely a fallback to a larger place._"}`;
+      return ok(result, text);
     }),
   );
 
