@@ -1,4 +1,13 @@
-import { CACHE_MAX_ENTRIES, CACHE_TTL_MS, ENDPOINTS, SERVER_NAME, SERVER_VERSION, UPSTREAM_PAGE_SIZE } from "../constants.js";
+import {
+  CACHE_MAX_ENTRIES,
+  CACHE_TTL_MS,
+  ENDPOINTS,
+  MAX_RETRIES,
+  RETRY_BASE_MS,
+  SERVER_NAME,
+  SERVER_VERSION,
+  UPSTREAM_PAGE_SIZE,
+} from "../constants.js";
 import type { Config } from "../config.js";
 import type {
   ApiEnvelope,
@@ -111,11 +120,41 @@ export class GeoLinkClient {
     return this.callCount;
   }
 
+  /**
+   * Retry only what a retry can fix. A timeout, a dropped connection or a 5xx
+   * is the upstream having a bad moment; a bad_request or a not_found is the
+   * same answer however many times it is asked, and retrying it just spends
+   * quota to receive the same refusal. Without this, one blip during a sweep
+   * became a permanent hole in the coverage, logged as a failed point.
+   */
+  private static readonly RETRYABLE: ReadonlySet<ErrorKind> = new Set<ErrorKind>(["timeout", "network", "upstream"]);
+
   private async request<T>(path: string, params: Params, cacheKey?: string): Promise<T> {
     if (cacheKey) {
       const hit = this.cache.get(cacheKey);
       if (hit !== undefined) return hit as T;
     }
+
+    let lastError: GeoLinkError | undefined;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff with jitter: without the random component,
+        // every point of a failed sweep retries in the same instant and
+        // recreates the burst that caused the failure.
+        const backoff = RETRY_BASE_MS * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, backoff + Math.random() * backoff));
+      }
+      try {
+        return await this.attempt<T>(path, params, cacheKey);
+      } catch (err) {
+        if (!(err instanceof GeoLinkError) || !GeoLinkClient.RETRYABLE.has(err.kind)) throw err;
+        lastError = err;
+      }
+    }
+    throw lastError ?? new GeoLinkError("Request failed", "upstream", "Retry shortly.");
+  }
+
+  private async attempt<T>(path: string, params: Params, cacheKey?: string): Promise<T> {
 
     const url = new URL(path, `${this.cfg.baseUrl}/`);
     for (const [k, v] of Object.entries(params)) {
