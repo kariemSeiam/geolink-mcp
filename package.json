@@ -1,0 +1,61 @@
+{
+  "name": "geolink-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for GeoLink (geolink-eg.com) \u2014 Egypt-native geocoding, place search, routing, distance matrix, nearest-branch ranking, and grid-based area coverage sweeps for AI agents.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "geolink-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
+    "start": "node dist/index.js",
+    "start:http": "TRANSPORT=http node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "clean": "rm -rf dist",
+    "test:e2e": "npm run build && (node scripts/mock-geolink.mjs & MOCK=$!; sleep 0.6; node scripts/e2e.mjs; EC=$?; kill $MOCK; exit $EC)",
+    "smoke": "npm run build && bash scripts/smoke.sh"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "geolink",
+    "geocoding",
+    "reverse-geocoding",
+    "directions",
+    "distance-matrix",
+    "places",
+    "egypt",
+    "ai-agents"
+  ],
+  "license": "MIT",
+  "author": "Kariem Seiam",
+  "homepage": "https://github.com/kariemSeiam/geolink-mcp-server#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kariemSeiam/geolink-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kariemSeiam/geolink-mcp-server/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
