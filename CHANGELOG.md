@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.1.0] - 2026-09-03
+
+### Added
+- `geolink_search_places` now pages to the depth `limit` asks for instead of returning a single upstream page, and reports `fetched` and `source_exhausted` so an agent is told when there is nothing more to find rather than having to guess.
+- `geolink_sweep_area` gained `results_per_point`, which raises how many places each grid point pulls — the fix for dense categories where one point holds more matches than a single request returns.
+- `geolink_find_nearest` searches deeper than `candidate_limit` in search mode, so the straight-line pre-filter chooses from a real pool; `candidate_limit` now goes to 50.
+
+### Changed
+- Sweep's cost cap and `dry_run` quote are now counted in API calls rather than grid points, so they stay accurate when `results_per_point` multiplies the work. `plan` reports `requests_per_point`, `estimated_api_calls`, and the `concurrency` actually used.
+- Sweep automatically lowers how many grid points it runs in parallel as depth rises, holding total simultaneous upstream requests within a fixed budget.
+
+### Fixed
+- The place-search cache key ignored search depth, so a shallow response could be served to a request that asked for more.
+- `geolink_find_nearest` checked its candidate-count guard after geocoding candidates and running the search; it now refuses before spending anything.
+- HTTP sessions were never evicted — a client that vanished without a `DELETE` leaked a session for the lifetime of the process. Idle sessions are now reaped.
+- Removed the OAuth discovery metadata: it advertised `/oauth/authorize` and `/oauth/token`, neither of which exists, so a client following it failed mid-handshake instead of connecting unauthenticated.
+- Documentation claimed HTTP mode was stateless per request and omitted search depth from the extension guide; both now match the code.
+
 ## [1.0.2] - 2026-09-03
 
 ### Changed

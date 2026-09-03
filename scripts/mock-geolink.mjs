@@ -29,12 +29,19 @@ createServer((req, res) => {
     const lat = +q.latitude || 30.04, lng = +q.longitude || 31.23;
     // Deterministic jitter so different grid points overlap partially (tests dedup).
     const j = (k) => ((Math.round(lat * 1000) + Math.round(lng * 1000) + k) % 7) * 0.0007;
-    return send({ success: true, data: [
+    const fixed = [
       place(`${q.query} Alpha`, 30.0459, 31.2243),                 // identical everywhere → deduped to 1
       place(`${q.query} Beta`, lat + j(1), lng + j(2), "Dokki", "Giza"),
       place(`${q.query} Gamma`, lat - j(3), lng + j(4), "Mohandessin", "Giza"),
       place(`${q.query} Far`, 25.0, 33.0, "Elsewhere", "Red Sea"),  // outside area → clipped
-    ] });
+    ];
+    // Depth: the real engine pages until it has max_results or the source runs
+    // dry. "deep" queries have plenty; everything else exhausts at `fixed`.
+    const want = Math.max(1, +q.max_results || 20);
+    if (!/deep/i.test(q.query ?? "")) return send({ success: true, data: fixed.slice(0, Math.max(fixed.length, 0)) });
+    const filler = Array.from({ length: Math.max(0, want - fixed.length) }, (_, i) =>
+      place(`${q.query} #${i + 1}`, lat + 0.001 * (i + 1), lng + 0.001 * (i + 1), "Dokki", "Giza"));
+    return send({ success: true, data: [...fixed, ...filler].slice(0, want) });
   }
   if (u.pathname === "/api/v2/directions") {
     const o = { lat: +q.origin_latitude, lng: +q.origin_longitude }, d = { lat: +q.destination_latitude, lng: +q.destination_longitude };

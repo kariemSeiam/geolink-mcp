@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { MAX_SEARCH_DEPTH, UPSTREAM_PAGE_SIZE } from "../constants.js";
 import { GeoLinkError } from "../services/client.js";
 import { cellText, fitToLimit, guarded, ok, routeMarkdown } from "../services/format.js";
 import { encodePolyline, formatLatLng, haversineKm, round, samplePoints } from "../services/geo.js";
@@ -334,9 +335,9 @@ Examples:
       .number()
       .int()
       .min(1)
-      .max(25)
+      .max(50)
       .default(10)
-      .describe("With search_query: how many search hits (closest by straight line) to route against. Default 10."),
+      .describe("With search_query: how many search hits (closest by straight line) to route against. Default 10. The search itself goes deeper than this so the pre-filter has a real pool to choose from."),
     rank_by: RankBy.default("duration").describe("Rank by travel 'duration' (default) or road 'distance'."),
     limit: z.number().int().min(1).max(50).default(5).describe("How many ranked results to return (default 5)."),
     language: languageParam,
@@ -417,13 +418,28 @@ Examples:
       const country = pickCountry(ctx, args.country);
       const origin = await resolveLocation(ctx, args.origin, lang, country);
 
+      // Guard before spending: geocoding candidates and searching both cost
+      // upstream calls, so refuse an over-sized job before paying for it.
+      const plannedCells = hasCandidates ? (args.candidates?.length ?? 0) : args.candidate_limit;
+      if (plannedCells > ctx.cfg.maxMatrixCells) {
+        throw new GeoLinkError(
+          `Too many candidates (${plannedCells}); limit is ${ctx.cfg.maxMatrixCells}`,
+          "bad_request",
+          "Lower candidate_limit / pass fewer candidates, or raise GEOLINK_MAX_MATRIX_CELLS.",
+        );
+      }
+
       let candidates: ResolvedLocation[];
       let places: (Place | undefined)[];
       if (hasCandidates) {
         candidates = await resolveMany(ctx, args.candidates ?? [], lang, country);
         places = candidates.map(() => undefined);
       } else {
-        const found = await ctx.client.textSearch(args.search_query ?? "", toLatLng(origin), lang, country);
+        // Search deeper than candidate_limit: the closest N by road time are
+        // not always the closest N by straight line, so give the pre-filter a
+        // wider pool to choose from.
+        const searchDepth = Math.min(MAX_SEARCH_DEPTH, Math.max(UPSTREAM_PAGE_SIZE, args.candidate_limit * 2));
+        const found = await ctx.client.textSearch(args.search_query ?? "", toLatLng(origin), lang, country, searchDepth);
         if (!found.length) {
           throw new GeoLinkError(
             `No places found for "${args.search_query}" near ${origin.label}`,
@@ -441,15 +457,6 @@ Examples:
           source: "geocode" as const,
         }));
         places = closest;
-      }
-
-      const cells = candidates.length;
-      if (cells > ctx.cfg.maxMatrixCells) {
-        throw new GeoLinkError(
-          `Too many candidates (${cells}); limit is ${ctx.cfg.maxMatrixCells}`,
-          "bad_request",
-          "Lower candidate_limit / pass fewer candidates, or raise GEOLINK_MAX_MATRIX_CELLS.",
-        );
       }
 
       const result = await ctx.client.distanceMatrix([toLatLng(origin)], candidates.map(toLatLng), lang, country);

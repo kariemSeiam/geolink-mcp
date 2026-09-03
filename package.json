@@ -1,6 +1,6 @@
 {
   "name": "geolink-mcp",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "MCP server for GeoLink (geolink-eg.com) \u2014 geocoding, place search, routing, distance matrix, nearest-branch ranking, and grid-based area coverage sweeps for AI agents.",
   "type": "module",
   "main": "dist/index.js",
