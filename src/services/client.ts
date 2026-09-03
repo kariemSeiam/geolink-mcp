@@ -41,7 +41,7 @@ export class GeoLinkError extends Error {
   }
 }
 
-class TtlCache<V> {
+export class TtlCache<V> {
   private readonly map = new Map<string, { value: V; expires: number }>();
   constructor(
     private readonly max: number,
@@ -109,11 +109,29 @@ function classify(status: number, message: string): GeoLinkError {
   );
 }
 
+/**
+ * Geocoding results are a property of the world, not of a session, so the cache
+ * that holds them lives for the process and is shared by every client built
+ * from it. In HTTP mode a server is constructed per session; with a cache per
+ * client, ten sessions asking about the same city paid the upstream ten times
+ * and the cache never did the job it exists for.
+ *
+ * The call counter stays per-client on purpose. It is what a sweep reports as
+ * api_calls_made, and a process-wide counter would bill one caller for another
+ * caller's traffic.
+ */
+const sharedCache = new TtlCache<unknown>(CACHE_MAX_ENTRIES, CACHE_TTL_MS);
+
 export class GeoLinkClient {
-  private readonly cache = new TtlCache<unknown>(CACHE_MAX_ENTRIES, CACHE_TTL_MS);
+  private readonly cache: TtlCache<unknown>;
   private callCount = 0;
 
-  constructor(private readonly cfg: Config) {}
+  constructor(
+    private readonly cfg: Config,
+    cache: TtlCache<unknown> = sharedCache,
+  ) {
+    this.cache = cache;
+  }
 
   /** Number of live HTTP calls made by this process (cache hits excluded). */
   get calls(): number {
@@ -224,13 +242,13 @@ export class GeoLinkClient {
   /* ---------------- Endpoint wrappers ---------------- */
 
   async geocode(query: string, language: string, country: string): Promise<Place> {
-    const key = `geocode|${language}|${country}|${query.trim().toLowerCase()}`;
+    const key = `${this.cfg.baseUrl}|geocode|${language}|${country}|${query.trim().toLowerCase()}`;
     const raw = await this.request<RawPlace>(ENDPOINTS.geocode, { query, language, country }, key);
     return normalizePlace(raw);
   }
 
   async reverseGeocode(lat: number, lng: number, language: string, country: string): Promise<Place> {
-    const key = `reverse|${language}|${country}|${lat.toFixed(5)},${lng.toFixed(5)}`;
+    const key = `${this.cfg.baseUrl}|reverse|${language}|${country}|${lat.toFixed(5)},${lng.toFixed(5)}`;
     const raw = await this.request<RawPlace>(
       ENDPOINTS.reverseGeocode,
       { latitude: lat, longitude: lng, language, country },
@@ -252,7 +270,7 @@ export class GeoLinkClient {
     country: string,
     maxResults: number = UPSTREAM_PAGE_SIZE,
   ): Promise<Place[]> {
-    const cacheKey = `search|${language}|${country}|${maxResults}|${query.trim().toLowerCase()}|${center?.lat?.toFixed(5)},${center?.lng?.toFixed(5)}`;
+    const cacheKey = `${this.cfg.baseUrl}|search|${language}|${country}|${maxResults}|${query.trim().toLowerCase()}|${center?.lat?.toFixed(5)},${center?.lng?.toFixed(5)}`;
     const raw = await this.request<unknown>(ENDPOINTS.textSearch, {
       query,
       latitude: center?.lat,

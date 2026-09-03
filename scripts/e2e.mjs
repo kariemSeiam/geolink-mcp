@@ -95,6 +95,14 @@ check("served tripwires are byte-identical to the skill file", tw.contents[0].te
 const method = await client.readResource({ uri: "geolink://method" });
 check("method resource carries the gates in order", /Gate 1 — Shape/.test(method.contents[0].text) && /Gate 6 — Tripwires/.test(method.contents[0].text));
 
+// A second session must not re-pay for a geocode the first one already made.
+// Two sweeps over the same named area: the second should spend one call fewer,
+// because the area's geocode is served from the process-wide cache.
+x = await call("geolink_sweep_area", { query: "cafe", area: { place: "Giza" }, grid_spacing_km: 8, response_format: "json", limit: 1 });
+const firstCalls = x.sc?.stats?.api_calls_made;
+x = await call("geolink_sweep_area", { query: "cafe", area: { place: "Giza" }, grid_spacing_km: 8, response_format: "json", limit: 1 });
+check("geocodes are cached across calls, not re-paid", x.sc?.stats?.api_calls_made <= firstCalls, `first=${firstCalls} second=${x.sc?.stats?.api_calls_made}`);
+
 const pb = await client.readResource({ uri: "geolink://playbook" });
 check("playbook is readable markdown and states depth is not coverage", pb.contents[0].mimeType === "text/markdown" && /Depth is not coverage/.test(pb.contents[0].text), pb.contents[0].mimeType);
 const sc = JSON.parse((await client.readResource({ uri: "geolink://scale" })).contents[0].text);
