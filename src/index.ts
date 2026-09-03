@@ -2,11 +2,11 @@
 /**
  * GeoLink MCP Server
  *
- * Exposes GeoLink (geolink-eg.com) — Egypt-native geocoding, reverse
- * geocoding, place search, directions, and distance matrix — to AI agents
- * over the Model Context Protocol, plus two composite tools that turn the raw
- * endpoints into agent-shaped answers: nearest-by-road-time ranking and
- * grid-tiled area coverage sweeps.
+ * Exposes GeoLink (geolink-eg.com) — geocoding, reverse geocoding, place
+ * search, directions, and distance matrix — to AI agents over the Model
+ * Context Protocol, plus two composite tools that turn the raw endpoints
+ * into agent-shaped answers: nearest-by-road-time ranking and grid-tiled
+ * area coverage sweeps.
  *
  * Transport: stdio by default; set TRANSPORT=http for stateless Streamable HTTP.
  */
@@ -36,8 +36,8 @@ Usage:
 Environment:
   GEOLINK_API_KEY              required — https://geolink-eg.com/register
   GEOLINK_BASE_URL             default https://www.geolink-eg.com
-  GEOLINK_DEFAULT_LANGUAGE     default ar
-  GEOLINK_DEFAULT_COUNTRY      default eg
+  GEOLINK_DEFAULT_LANGUAGE     default en
+  GEOLINK_DEFAULT_COUNTRY      default (none — no country bias)
   GEOLINK_TIMEOUT_MS           default 30000
   GEOLINK_MAX_MATRIX_CELLS     default 100
   GEOLINK_SWEEP_MAX_POINTS     default 200
@@ -50,7 +50,7 @@ export function buildServer(cfg: Config): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
-      instructions: `GeoLink gives you Egypt-first location intelligence. Inputs accept coordinates ("lat,lng") or place names anywhere a location is needed; names are geocoded automatically and cached. Defaults: language=${cfg.defaultLanguage}, country=${cfg.defaultCountry}.
+      instructions: `GeoLink gives you location intelligence: geocoding, place search, directions, distance matrix, and grid-based area sweeps. Inputs accept coordinates ("lat,lng") or place names anywhere a location is needed; names are geocoded automatically and cached. Defaults: language=${cfg.defaultLanguage}${cfg.defaultCountry ? `, country=${cfg.defaultCountry}` : ""}.
 
 Pick tools by task:
 - One address ⇄ coordinates: geolink_geocode / geolink_reverse_geocode.

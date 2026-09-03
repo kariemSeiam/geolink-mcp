@@ -20,13 +20,13 @@ const tools = (await client.listTools()).tools;
 check("7 tools registered", tools.length === 7, tools.map(t => t.name).join(","));
 check("all tools have annotations + outputSchema", tools.every(t => t.annotations?.readOnlyHint === true && t.outputSchema));
 const resources = (await client.listResources()).resources;
-check("2 resources", resources.length === 2, resources.map(r => r.uri).join(","));
+check("1 resource", resources.length === 1, resources.map(r => r.uri).join(","));
 const prompts = (await client.listPrompts()).prompts;
 check("3 prompts", prompts.length === 3, prompts.map(p => p.name).join(","));
 const cap = JSON.parse((await client.readResource({ uri: "geolink://capabilities" })).contents[0].text);
 check("capabilities resource has limits", cap.limits.sweep_max_points === 60);
-const govs = JSON.parse((await client.readResource({ uri: "geolink://egypt/governorates" })).contents[0].text);
-check("27 governorates", govs.count === 27);
+const govs = JSON.parse((await client.readResource({ uri: "geolink://capabilities" })).contents[0].text);
+check("capabilities lists tools", Object.keys(govs.tools).length === 7);
 const p = await client.getPrompt({ name: "geolink_nearest_branch", arguments: { customer_location: "Tahrir", branches: "A;B" } });
 check("prompt renders", p.messages[0].content.text.includes("geolink_find_nearest"));
 
