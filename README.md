@@ -1,6 +1,6 @@
 <div align="center">
 
-![GeoLink MCP](assets/og-image.png)
+![GeoLink MCP](https://raw.githubusercontent.com/kariemSeiam/geolink-mcp/main/assets/og-image.png)
 
 # 🧭 GeoLink MCP
 
