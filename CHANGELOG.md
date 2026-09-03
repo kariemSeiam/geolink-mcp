@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [1.6.1] - 2026-09-03
+
+### Fixed
+- The consent page's form always posted to `/authorize`, but the server only ever listened at `${GEOLINK_MCP_PATH}/authorize` (`/mcp/authorize` by default). The page rendered fine on GET, so this was invisible until someone actually clicked Connect, where it 404'd — the whole remote-auth flow was unusable end to end on any deployment with a non-empty mount path. `scripts/oauth-flow.mjs` now scrapes the rendered form's `action` attribute and asserts it matches, so a hardcoded path can't silently drift from the mount again.
+
 ## [1.6.0] - 2026-09-03
 
 ### Added
