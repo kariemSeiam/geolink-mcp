@@ -165,34 +165,34 @@ A single search returns one page from one center point. To find *everything* of 
 
 ## 🧠 How it thinks
 
+```mermaid
+%%{init: {"flowchart": {"curve": "monotoneY"}, "themeVariables": {"fontSize": "15px"}} }%%
+flowchart TB
+    Client(["MCP Client\nClaude · Cursor · any agent runtime"])
+    Gateway["protocol gateway"]
+    Norm["normalize + cache\none envelope in, one shape out\n10-min geocode cache"]
+    API[("GeoLink API\ngeolink-eg.com")]
+
+    Client -- "stdio / streamable-http" --> Gateway
+
+    subgraph Tools["seven tools"]
+        direction LR
+        Geo["geocode\nreverse_geocode"]
+        Search["search_places"]
+        Dir["get_directions"]
+        Matrix["distance_matrix"]
+        Nearest["find_nearest\n(composite)"]:::composite
+        Sweep["sweep_area\n(composite)"]:::composite
+    end
+
+    Gateway --> Geo & Search & Dir & Matrix & Nearest & Sweep
+    Geo & Search & Dir & Matrix & Nearest & Sweep --> Norm
+    Norm --> API
+
+    classDef composite fill:#6E56CF,stroke:#4c3a9e,color:#fff,font-weight:bold
 ```
-                    ┌─────────────────────────────────────────┐
-                    │              MCP Client                 │
-                    │   (Claude, Cursor, any agent runtime)    │
-                    └───────────────────┬───────────────────┘
-                                        │  stdio / streamable-http
-                    ┌───────────────────▼───────────────────┐
-                    │              GeoLink MCP                │
-                    │                                          │
-    ┌───────────────┼─────────────┬─────────────┬────────────┼───────────────┐
-    │               │             │             │            │               │
-┌───▼────┐   ┌──────▼─────┐  ┌────▼────┐  ┌─────▼─────┐  ┌───▼────┐   ┌──────▼──────┐
-│geocode │   │search_places│  │directions│  │  matrix   │  │nearest │   │ sweep_area  │
-│reverse │   │             │  │          │  │           │  │(composite)│ │(composite) │
-└───┬────┘   └──────┬─────┘  └────┬────┘  └─────┬─────┘  └───┬────┘   └──────┬──────┘
-    │               │             │             │            │               │
-    └───────────────┴─────────────┴──────┬──────┴────────────┴───────────────┘
-                                          │
-                              ┌───────────▼────────────┐
-                              │   normalize + cache      │   ← one envelope in,
-                              │  (10-min geocode cache)  │      one shape out
-                              └───────────┬────────────┘
-                                          │
-                                  ┌───────▼────────┐
-                                  │   GeoLink API    │
-                                  │ geolink-eg.com   │
-                                  └─────────────────┘
-```
+
+*Composite tools (`find_nearest`, `sweep_area`) fan out into several of the calls above — one matrix, several searches, several sweeps of the grid — before they ever reach `normalize + cache`.*
 
 **Design principles, not slogans:**
 
