@@ -13,6 +13,7 @@ import type {
   RawRoute,
   RawRouteEndpoint,
   Route,
+  XPlace,
 } from "../types.js";
 
 function num(v: unknown, fallback = 0): number {
@@ -162,4 +163,26 @@ export function normalizeMatrix(raw: RawMatrix, fallbackOrigins: LatLng[], fallb
   }
 
   return { origins, destinations, matrix, nearest_destination_index: nearest };
+}
+
+/**
+ * An x place, in this server's vocabulary.
+ *
+ * The only change is the name of the name. GeoLink calls a place's name
+ * `short_address` across v1, v2 and x, and `normalizePlace` above has always
+ * turned that into `name` for the tools; x places go through the same door so
+ * that a model never meets two words for one thing depending on which tool it
+ * reached for.
+ *
+ * Nothing else is touched. x already emits null for what a place does not
+ * have, and filling those in would replace a fact with a guess.
+ */
+export function normalizeXPlace(raw: XPlace): XPlace & { name: string } {
+  return { ...raw, name: raw.short_address || raw.address || "" };
+}
+
+export function normalizeXPlaces(raw: XPlace[]): (XPlace & { name: string })[] {
+  return raw
+    .filter((p) => p && p.location && !(p.location.lat === 0 && p.location.lng === 0))
+    .map(normalizeXPlace);
 }

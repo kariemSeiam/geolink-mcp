@@ -1,31 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import {
-  DEFAULT_DEDUPE_METERS,
-  DEFAULT_GRID_SPACING_KM,
-  DEEP_SEARCH_ADVISORY,
-  SWEEP_CLIENT_BATCH,
-  SWEEP_OUTBOUND_BUDGET,
-  UPSTREAM_PAGE_SIZE,
-} from "../constants.js";
 import { GeoLinkError } from "../services/client.js";
-import { fitToLimit, guarded, ok, paginate, placeMarkdown, placesToGeoJson } from "../services/format.js";
-import {
-  boundsFromCenterRadius,
-  boundsSizeKm,
-  buildGrid,
-  dedupePlaces,
-  expandBounds,
-  formatLatLng,
-  haversineKm,
-  inBounds,
-  mapWithConcurrency,
-  round,
-  suggestSpacingKm,
-  type GridOptions
-} from "../services/geo.js";
+import { fitToLimit, guarded, ok, paginate, placesToGeoJson } from "../services/format.js";
+import { formatLatLng } from "../services/geo.js";
+import { normalizeXPlaces } from "../services/normalize.js";
 import {
   BoundsSchema,
   countryParam,
@@ -34,14 +12,49 @@ import {
   LocationInputSchema,
   pickCountry,
   pickLang,
-  resolveLocation,
-  toLatLng,
   type ToolContext,
 } from "../services/resolve.js";
-import { PaginationFields, PlaceSchema } from "../services/schemas.js";
-import type { Bounds, LatLng, Place } from "../types.js";
+import { PaginationFields, XNearSchema, XPlaceSchema } from "../services/schemas.js";
+import type { Bounds, LatLng, XPlace } from "../types.js";
 
-const PlaceField = z.enum(["name", "address", "address_parts", "location", "bounds"]);
+/**
+ * Covering ground used to be this file's job, and it was the wrong place for it.
+ *
+ * A single search sees roughly three hundred places whatever you ask for - the
+ * ceiling belongs to the vantage point, not to the world - so covering an area
+ * means standing in several places and merging what each one saw. This tool
+ * used to build that grid itself: tile the bounds, search each point, clip,
+ * de-duplicate by name and distance, and count how many points came back full.
+ * Two hundred and twenty lines of it, with a 3 km spacing chosen because it
+ * felt safe.
+ *
+ * It is measured now, and 3 km was not safe, it was wasteful: neighbouring
+ * points 3 km apart returned 69% the same places and found 472 of them, while
+ * 15 km apart returned 11% overlap and found 818. The knee is 15 km, the engine
+ * knows it, and a number copied into this file would have drifted from it the
+ * first time it moved.
+ *
+ * So the grid, the spacing, the merge and the de-duplication all live in the
+ * engine now, and this file does what a tool should: turn a question into a
+ * request, and an answer into something a model can read without being misled.
+ */
+
+const PlaceField = z.enum([
+  "name",
+  "address",
+  "address_parts",
+  "location",
+  "category",
+  "type",
+  "rating",
+  "phone",
+  "website",
+  "photo",
+  "hours",
+  "timezone",
+  "distance_m",
+  "place_id",
+]);
 type PlaceFieldT = z.infer<typeof PlaceField>;
 
 const AreaSchema = z
@@ -52,7 +65,7 @@ const AreaSchema = z
           .string()
           .min(1)
           .max(300)
-          .describe('A named area to cover: a governorate, city, or district, e.g. "Giza", "الإسكندرية", "Nasr City". Its geocoded viewport bounds define the sweep.'),
+          .describe('A named area to cover: a governorate, city, or district — "Giza", "الإسكندرية", "Nasr City". Its geocoded viewport becomes the sweep bounds.'),
       })
       .strict(),
     z
@@ -64,128 +77,99 @@ const AreaSchema = z
     z.object({ bounds: BoundsSchema }).strict(),
   ])
   .describe(
-    'The area to cover. One of: {place: "Giza"} (geocoded bounds), {center: "30.04,31.23" | "Tahrir Square", radius_km: 5}, or {bounds: {northeast:{lat,lng}, southwest:{lat,lng}}}.',
+    'The ground to cover. One of: {place: "Giza"}, {center: "Tahrir Square" | {lat,lng}, radius_km: 5}, or {bounds: {northeast, southwest}}.',
   );
-
-type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
   const SweepShape = {
     query: z.string().min(1).max(300).describe('What to find everywhere in the area: "pharmacy", "school", "كافيه", "ATM".'),
     area: AreaSchema,
-    grid_spacing_km: z
-      .number()
-      .min(0.5)
-      .max(25)
-      .default(DEFAULT_GRID_SPACING_KM)
+    view: z
+      .enum(["places", "summary"])
+      .default("places")
       .describe(
-        "Distance between query points in km (default 3). Dense urban categories: 2-3. Sparse categories or rural areas: 5-7. Smaller = more calls + more coverage.",
-      ),
-    padding_km: z
-      .number()
-      .min(0)
-      .max(25)
-      .default(0)
-      .describe("Expand the area's bounds outward by this many km before tiling (default 0). Useful when a geocoded viewport is tight."),
-    results_per_point: z
-      .number()
-      .int()
-      .min(UPSTREAM_PAGE_SIZE)
-      .default(UPSTREAM_PAGE_SIZE)
-      .describe(
-        `How many places to pull from each grid point (default ${UPSTREAM_PAGE_SIZE} = one request per point). Raise it for dense categories where a single point has more matches than one request returns — pharmacies downtown, cafés in a mall district. Costs ceil(results_per_point / ${UPSTREAM_PAGE_SIZE}) requests per point, so it multiplies the whole sweep: check dry_run first.`,
+        "'places' lists them. 'summary' returns counts instead — how many, by district, by category, how many rated and open — in a fraction of the tokens. Use 'summary' for \"how many X are in Y\" and to find which districts are worth listing.",
       ),
     dry_run: z
       .boolean()
       .default(false)
-      .describe("Plan only: return the grid size and exact API-call count without spending any quota. ALWAYS dry_run first for unfamiliar areas."),
-    clip_to_area: z
-      .boolean()
-      .default(true)
-      .describe("Drop results that fall outside the (padded) area bounds. Default true."),
-    dedupe_meters: z
+      .describe("Plan only: how many requests this needs and roughly how long, without searching. Cheap; use it when an area's size is unfamiliar."),
+    spacing_km: z
       .number()
-      .min(0)
-      .max(500)
-      .default(DEFAULT_DEDUPE_METERS)
-      .describe("Merge places with the same normalized name within this many metres (default 60). 0 disables name-based dedup."),
-    limit: z.number().int().min(1).max(500).default(100).describe("Max places to return in this response (default 100). Sweep results are computed once per call; page with offset."),
-    offset: z.number().int().min(0).default(0).describe("Skip this many unique places."),
+      .min(2)
+      .max(50)
+      .optional()
+      .describe(
+        "Distance between vantage points. Leave unset — the default is a measured value, not a guess, and lowering it mostly buys overlap. Tighten it only for a category so dense that whole streets are being missed.",
+      ),
+    pages_per_point: z
+      .number()
+      .int()
+      .min(1)
+      .max(15)
+      .optional()
+      .describe("How deep to read at each vantage point (1-15). Leave unset unless a dense category is coming back thin."),
+    continue_from: z
+      .string()
+      .optional()
+      .describe(
+        "Resume ground a previous call did not reach: pass back its `continue_from` verbatim. Opaque — it encodes where the sweep stopped, not a position you can construct.",
+      ),
+    limit: z.number().int().min(1).max(500).default(100).describe("How many places to return in this response (default 100). Page the rest with offset — it is served from the same sweep, not a new one."),
+    offset: z.number().int().min(0).default(0).describe("Skip this many places."),
     fields: z
       .array(PlaceField)
       .min(1)
       .optional()
-      .describe("Restrict each place to these fields to save tokens, e.g. [\"name\",\"location\"]. Default: all."),
+      .describe('Return only these fields per place, to save tokens: ["name","location"]. Default: all of them.'),
     response_format: z
       .enum(["markdown", "json", "geojson"])
       .default("markdown")
-      .describe("'markdown' (readable), 'json' (raw), or 'geojson' (FeatureCollection of points, map-ready)."),
+      .describe("'markdown' (readable), 'json' (raw), or 'geojson' (FeatureCollection, map-ready)."),
     language: languageParam,
     country: countryParam,
   };
   const SweepInput = z.object(SweepShape);
 
-  const StatsSchema = z.object({
-    api_calls_made: z.number().int(),
-    points_queried: z.number().int(),
-    points_succeeded: z.number().int(),
-    points_failed: z.number().int(),
-    raw_results: z.number().int(),
-    after_clip: z.number().int(),
-    unique_results: z.number().int(),
-    saturated_points: z.number().int(),
-    by_governorate: z.record(z.number().int()),
-    by_district: z.record(z.number().int()),
-    failed_details: z.array(z.object({
-      point_index: z.number().int(),
-      error_kind: z.enum(["auth", "quota", "not_found", "bad_request", "timeout", "network", "upstream"]),
-      message: z.string(),
-    })).optional(),
-  });
-
   const SweepOutput = {
     query: z.string(),
     dry_run: z.boolean(),
+    view: z.enum(["places", "summary"]),
     area: z.object({
       source: z.enum(["place", "center_radius", "bounds"]),
       label: z.string(),
-      bounds: BoundsSchema,
-      width_km: z.number(),
-      height_km: z.number(),
-      center: LatLngSchema,
+      center: LatLngSchema.optional(),
       radius_km: z.number().optional(),
+      bounds: BoundsSchema.optional(),
     }),
-    plan: z.object({
-      grid_spacing_km: z.number(),
-      grid_points: z.number().int(),
-      results_per_point: z.number().int(),
-      requests_per_point: z.number().int(),
-      estimated_api_calls: z.number().int(),
-      max_api_calls_allowed: z.number().int(),
-      concurrency: z.number().int(),
-      sample_points: z.array(LatLngSchema),
-    }),
-    stats: StatsSchema.optional(),
-    completeness: z
+    resolved_to: XNearSchema.nullable().describe(
+      "What a named place resolved to. Null when coordinates or bounds were given. Worth reading: names collide, and a sweep of the wrong Nasr City looks exactly like a sweep of the right one.",
+    ),
+    plan: z
       .object({
-        saturated_points: z.number().int(),
-        saturation_ratio: z.number(),
-        saturated: z.boolean(),
-        overlap_ratio: z.number(),
-        tiles_isolated: z.boolean(),
-        edges_checked: z.boolean(),
-        verdict: z.enum(["bounded", "floor", "gaps_likely"]),
-        notes: z.array(z.string()),
-        remaining_check: z.string(),
+        requests_needed: z.number().int(),
+        estimated_seconds: z.number(),
+        fits_in_one_request: z.boolean(),
       })
       .optional(),
+    summary: z.record(z.unknown()).optional(),
+    area_fully_swept: z
+      .boolean()
+      .describe("False when the sweep ran out of time before covering the whole area. Pass continue_from to reach the rest."),
+    continue_from: z.string().optional(),
+    results_complete: z
+      .boolean()
+      .optional()
+      .describe(
+        "False when the source still had more to give at the points that were visited — `total` is then a floor, not a count. Raise pages_per_point. Undefined means the API did not say.",
+      ),
+    distance_measured_from: LatLngSchema.optional().describe(
+      "Each place's distance_m is a straight line from this point, not from any origin of yours.",
+    ),
     ...PaginationFields,
-    places: z.array(PlaceSchema.partial().extend({ location: LatLngSchema.optional() })).optional(),
+    places: z.array(XPlaceSchema.partial()).optional(),
     geojson: z
-      .object({
-        type: z.literal("FeatureCollection"),
-        features: z.array(z.record(z.unknown())),
-      })
+      .object({ type: z.literal("FeatureCollection"), features: z.array(z.record(z.unknown())) })
       .optional(),
     note: z.string().optional(),
   };
@@ -193,289 +177,245 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     "geolink_sweep_area",
     {
-      title: "Sweep an area for places (grid coverage)",
-      description: `Exhaustively find every place matching a query across a whole area — a governorate, city, district, radius, or bounding box — by tiling it with a grid of query points and running one place search per point, then merging and de-duplicating the hits.
+      title: "Sweep an area for places",
+      description: `Find every place matching a query across a whole area — a governorate, city, district, radius, or bounding box — by searching it from several vantage points and merging what each one saw.
 
-A single geolink_search_places call returns one page from one center. This tool is how you get "all pharmacies in Giza" or "every school within 10 km of Tanta".
+One search reads one point as deeply as you like and still sees only what is near it: a large limit reads deeper, it does not read wider. This is the tool that reads wider. Use geolink_search_places when one neighbourhood is the question; use this one for "all pharmacies in Giza" or "every school within 10 km of Tanta".
 
-Cost model: api_calls = grid_points × ceil(results_per_point / ${UPSTREAM_PAGE_SIZE}) (+1 geocode if the area is a name). Points ≈ (width/spacing) × (height/spacing). Hard cap: ${ctx.cfg.sweepMaxPoints} API calls (GEOLINK_SWEEP_MAX_POINTS). Runs up to ${ctx.cfg.sweepConcurrency} points in parallel, automatically reduced when results_per_point is raised so total simultaneous upstream requests stay bounded.
+The spacing between vantage points, how far each one reaches, the merge and the de-duplication are all decided by the API from measured behaviour. You do not have to plan the grid, and mostly should not try.
 
-WORKFLOW: call with dry_run=true first → read plan.estimated_api_calls → adjust grid_spacing_km → run for real.
+Two different kinds of "there is more", and they are not interchangeable:
+  - has_more / next_offset — more places in this same sweep. Page them with offset; it costs nothing, the sweep is not repeated.
+  - area_fully_swept: false + continue_from — the sweep ran out of time with ground still unvisited. Pass continue_from back to cover it. This is the one that means results are incomplete.
 
 Args:
-  - query (string): Category or name to find everywhere.
+  - query (string): what to find.
   - area: {place} | {center, radius_km} | {bounds}.
-  - grid_spacing_km (0.5-25, default 3).
-  - results_per_point (≥20, default 20, no ceiling): depth per point; multiplies API calls.
-  - padding_km (0-25, default 0).
-  - dry_run (bool, default false).
-  - clip_to_area (bool, default true).
-  - dedupe_meters (0-500, default 60).
-  - limit (1-500, default 100), offset (default 0).
-  - fields (subset of name|address|address_parts|location): trim output.
+  - view ('places' | 'summary', default 'places'): 'summary' answers "how many" and "which districts" for a fraction of the tokens.
+  - dry_run (bool, default false): the request count and rough duration, without searching.
+  - spacing_km (2-50), pages_per_point (1-15): both optional, both better left alone.
+  - continue_from: an earlier response's continue_from, verbatim.
+  - limit (1-500, default 100), offset.
+  - fields: trim each place.
   - response_format ('markdown' | 'json' | 'geojson').
   - language, country.
 
-Returns (structuredContent):
-  {
-    "query", "dry_run",
-    "area": { source, label, bounds, width_km, height_km, center, radius_km? },
-    "plan": { grid_spacing_km, grid_points, results_per_point, requests_per_point,
-              estimated_api_calls, max_api_calls_allowed, concurrency, sample_points },
-    "stats"?: { api_calls_made, points_queried, points_succeeded, points_failed, raw_results, after_clip, unique_results,
-                by_governorate: {name: count}, by_district: {name: count} },      // not present on dry_run
-    "total", "count", "offset", "has_more", "next_offset"?,
-    "places"?: [ Place (possibly field-trimmed) ],
-    "geojson"?: FeatureCollection                                                     // response_format='geojson'
-  }
+Each place carries name, address, address_parts, location, category, type, timezone, and — when the place has one — rating (with its count), phone, website, photo and hours. An absent field means the place has no such thing, not that it could not be read.
 
 Examples:
-  - "All pharmacies in Giza" -> query="pharmacy", area={place:"Giza"}, dry_run=true → then real run
-  - Dense category missing results per tile -> raise results_per_point to 40-60 and dry_run again to see the new cost
-  - "Every ATM within 5 km of Smart Village" -> query="ATM", area={center:"Smart Village", radius_km:5}, grid_spacing_km=2
-  - "Cafés in this box" -> query="cafe", area={bounds:{northeast:{...}, southwest:{...}}}, response_format="geojson"
-
-Errors: bad_request when the grid exceeds the cap — the hint tells you the smallest spacing that fits.`,
+  - "All pharmacies in Giza" → query="pharmacy", area={place:"Giza"}
+  - "How many pharmacies in Giza, and where are they concentrated?" → the same, view="summary"
+  - "Every ATM within 5 km of Smart Village" → query="ATM", area={center:"Smart Village", radius_km:5}
+  - "Cafés in this box, on a map" → area={bounds:{...}}, response_format="geojson"`,
       inputSchema: SweepShape,
       outputSchema: SweepOutput,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    guarded(async (raw: z.infer<typeof SweepInput>, extra: Extra) => {
+    guarded(async (raw: z.infer<typeof SweepInput>) => {
       const args = SweepInput.parse(raw);
       const lang = pickLang(ctx, args.language);
       const country = pickCountry(ctx, args.country);
 
-      /* ---------- Resolve the area ---------- */
-      let bounds: Bounds;
+      /* ---------- Say where, in the terms the API takes ---------- */
+      // Three ways to name ground, and each maps to a different pair of
+      // parameters. A name goes over as a name: the API resolves it and tells
+      // us what it picked, which is both one round trip fewer and one more
+      // fact than geocoding it here would have given us.
       let source: "place" | "center_radius" | "bounds";
       let label: string;
-      let grid: GridOptions = {};
+      let center: LatLng | undefined;
       let radiusKm: number | undefined;
+      let bounds: Bounds | undefined;
+      let near: string | undefined;
+      let boundsParam: string | undefined;
 
       if ("place" in args.area) {
+        // A governorate is an area, not a point, and its viewport is the only
+        // thing that says how far it reaches. `near` would collapse it to its
+        // centre and sweep a circle that is both too small and the wrong shape.
         source = "place";
         const geo = await ctx.client.geocode(args.area.place, lang, country);
         if (!geo.bounds) {
           throw new GeoLinkError(
-            `"${args.area.place}" geocoded without viewport bounds, so it cannot define an area`,
+            `"${args.area.place}" geocoded without viewport bounds, so it does not describe an area`,
             "bad_request",
-            "Use area={center: \"<place>\", radius_km: N} instead.",
+            `Use area={center: "${args.area.place}", radius_km: N} instead.`,
           );
         }
         bounds = geo.bounds;
-        label = geo.name || geo.address || args.area.place;
+        label = geo.name || args.area.place;
       } else if ("center" in args.area) {
         source = "center_radius";
-        const c = await resolveLocation(ctx, args.area.center, lang, country);
         radiusKm = args.area.radius_km;
-        bounds = boundsFromCenterRadius(toLatLng(c), radiusKm);
-        grid = { circle: { center: toLatLng(c), radiusKm } };
-        label = `${radiusKm} km around ${c.label}`;
+        if (typeof args.area.center === "string") {
+          near = args.area.center;
+          label = `${radiusKm} km around ${near}`;
+        } else {
+          center = args.area.center;
+          label = `${radiusKm} km around ${formatLatLng(center)}`;
+        }
       } else {
         source = "bounds";
         bounds = {
-          northeast: { lat: Math.max(args.area.bounds.northeast.lat, args.area.bounds.southwest.lat), lng: Math.max(args.area.bounds.northeast.lng, args.area.bounds.southwest.lng) },
-          southwest: { lat: Math.min(args.area.bounds.northeast.lat, args.area.bounds.southwest.lat), lng: Math.min(args.area.bounds.northeast.lng, args.area.bounds.southwest.lng) },
+          northeast: {
+            lat: Math.max(args.area.bounds.northeast.lat, args.area.bounds.southwest.lat),
+            lng: Math.max(args.area.bounds.northeast.lng, args.area.bounds.southwest.lng),
+          },
+          southwest: {
+            lat: Math.min(args.area.bounds.northeast.lat, args.area.bounds.southwest.lat),
+            lng: Math.min(args.area.bounds.northeast.lng, args.area.bounds.southwest.lng),
+          },
         };
         label = `box ${formatLatLng(bounds.southwest, 3)} → ${formatLatLng(bounds.northeast, 3)}`;
       }
 
-      bounds = expandBounds(bounds, args.padding_km);
-      if (grid.circle && args.padding_km > 0) grid = { circle: { ...grid.circle, radiusKm: grid.circle.radiusKm + args.padding_km } };
-      const size = boundsSizeKm(bounds);
-      const center: LatLng = {
-        lat: (bounds.northeast.lat + bounds.southwest.lat) / 2,
-        lng: (bounds.northeast.lng + bounds.southwest.lng) / 2,
-      };
-
-      /* ---------- Plan the grid ---------- */
-      const points = buildGrid(bounds, args.grid_spacing_km, grid);
-      // Depth multiplies cost: each point spends one request per page of
-      // results it asks for. The cap is enforced on requests, not points, so
-      // the number the caller is shown is the number they actually pay.
-      const requestsPerPoint = Math.ceil(args.results_per_point / UPSTREAM_PAGE_SIZE);
-      const estimatedCalls = points.length * requestsPerPoint;
-      // Points in flight × that point's own parallel requests must stay within
-      // the outbound budget — see SWEEP_OUTBOUND_BUDGET.
-      const perPointParallel = Math.min(SWEEP_CLIENT_BATCH, requestsPerPoint);
-      const effectiveConcurrency = Math.max(
-        1,
-        Math.min(ctx.cfg.sweepConcurrency, Math.floor(SWEEP_OUTBOUND_BUDGET / perPointParallel)),
-      );
-      const plan = {
-        grid_spacing_km: args.grid_spacing_km,
-        grid_points: points.length,
-        results_per_point: args.results_per_point,
-        requests_per_point: requestsPerPoint,
-        estimated_api_calls: estimatedCalls,
-        max_api_calls_allowed: ctx.cfg.sweepMaxPoints,
-        concurrency: effectiveConcurrency,
-        sample_points: points.slice(0, 5),
-      };
-      const areaOut = { source, label, bounds, width_km: size.width_km, height_km: size.height_km, center, ...(radiusKm !== undefined ? { radius_km: radiusKm } : {}) };
-
-      if (estimatedCalls > ctx.cfg.sweepMaxPoints) {
-        const budgetPoints = Math.max(1, Math.floor(ctx.cfg.sweepMaxPoints / requestsPerPoint));
-        const suggested = suggestSpacingKm(bounds, budgetPoints, grid);
-        const depthNote =
-          requestsPerPoint > 1
-            ? ` — or drop results_per_point to ${UPSTREAM_PAGE_SIZE} (${points.length} calls)`
-            : "";
-        throw new GeoLinkError(
-          `Sweep needs ${estimatedCalls} API calls (${points.length} points × ${requestsPerPoint}), over the cap of ${ctx.cfg.sweepMaxPoints} (area ${size.width_km} × ${size.height_km} km at ${args.grid_spacing_km} km spacing)`,
-          "bad_request",
-          `Set grid_spacing_km=${suggested} (≈ ${buildGrid(bounds, suggested, grid).length * requestsPerPoint} calls)${depthNote}, shrink the area, or raise GEOLINK_SWEEP_MAX_POINTS.`,
-        );
+      if (bounds) {
+        boundsParam = [bounds.southwest.lat, bounds.southwest.lng, bounds.northeast.lat, bounds.northeast.lng]
+          .map((n) => n.toFixed(6))
+          .join(",");
       }
 
+      const areaOut = {
+        source,
+        label,
+        ...(center ? { center } : {}),
+        ...(radiusKm !== undefined ? { radius_km: radiusKm } : {}),
+        ...(bounds ? { bounds } : {}),
+      };
+
+      const call = {
+        query: args.query,
+        near,
+        center,
+        radiusKm,
+        bounds: boundsParam,
+        language: lang,
+        country,
+        pagesPerPoint: args.pages_per_point,
+        spacingKm: args.spacing_km,
+        cursor: args.continue_from,
+      };
+
+      /* ---------- Price it, if that is all that was asked ---------- */
       if (args.dry_run) {
+        const res = await ctx.client.xSweep({ ...call, dryRun: true });
+        const plan = res.plan as { requests_needed?: number; estimated_seconds?: number; fits_in_one_request?: boolean } | undefined;
         const structured = {
           query: args.query,
           dry_run: true,
+          view: args.view,
           area: areaOut,
-          plan,
+          resolved_to: res.near ?? null,
+          plan: {
+            requests_needed: plan?.requests_needed ?? 1,
+            estimated_seconds: plan?.estimated_seconds ?? 0,
+            fits_in_one_request: plan?.fits_in_one_request ?? true,
+          },
+          area_fully_swept: plan?.fits_in_one_request ?? true,
           total: 0,
           count: 0,
           offset: 0,
           has_more: false,
-          note: "Dry run — no search calls were made. Re-run with dry_run=false to execute.",
+          note: "Plan only — nothing was searched. Re-run with dry_run=false.",
         };
         const text = [
           `# Sweep plan: "${args.query}" over ${label}`,
           "",
-          `- **Area**: ${size.width_km} km × ${size.height_km} km (${source})`,
-          `- **Bounds**: NE ${formatLatLng(bounds.northeast)} · SW ${formatLatLng(bounds.southwest)}`,
-          `- **Grid spacing**: ${args.grid_spacing_km} km → **${points.length}** points`,
-          `- **Depth**: ${args.results_per_point} results/point → ${requestsPerPoint} request(s) each`,
-          `- **API calls**: **${estimatedCalls}** (cap ${ctx.cfg.sweepMaxPoints})`,
-          `- **Concurrency**: ${effectiveConcurrency} point(s) at a time${effectiveConcurrency < ctx.cfg.sweepConcurrency ? ` (reduced from ${ctx.cfg.sweepConcurrency} to hold total parallel requests at ${effectiveConcurrency * perPointParallel})` : ""}`,
-          `- **Sample points**: ${points.slice(0, 5).map((p) => formatLatLng(p, 4)).join("; ")}`,
+          `- **Requests**: ${structured.plan.requests_needed}${structured.plan.fits_in_one_request ? " — fits in one call" : " — will need continue_from to finish"}`,
+          `- **Estimated**: ~${structured.plan.estimated_seconds}s`,
+          ...(res.near ? [`- **Resolved to**: ${res.near.short_address ?? res.near.address ?? "?"} (${formatLatLng(res.near.location)})`] : []),
           "",
-          "_No quota spent. Re-run with dry_run=false to execute._",
+          "_Nothing searched. Re-run with dry_run=false._",
         ].join("\n");
         return ok(structured, text);
       }
 
-      /* ---------- Execute ---------- */
-      const progressToken = extra._meta?.progressToken;
-      const notify = async (done: number, total: number): Promise<void> => {
-        if (progressToken === undefined) return;
-        try {
-          await extra.sendNotification({
-            method: "notifications/progress",
-            params: { progressToken, progress: done, total, message: `Searched ${done}/${total} grid points` },
-          });
-        } catch {
-          /* progress is best-effort */
-        }
-      };
-
-      const callsBefore = ctx.client.calls;
-      let failed = 0;
-      const failures: { point_index: number; error_kind: GeoLinkError["kind"]; message: string }[] = [];
-      const perPoint = await mapWithConcurrency(
-        points,
-        effectiveConcurrency,
-        async (p, index): Promise<Place[]> => {
-          try {
-            return await ctx.client.textSearch(args.query, p, lang, country, args.results_per_point);
-          } catch (err) {
-            // Auth/quota errors should abort the whole sweep; anything else is a soft miss.
-            if (err instanceof GeoLinkError && (err.kind === "auth" || err.kind === "quota")) throw err;
-            failed++;
-            const geoErr = err instanceof GeoLinkError ? err : null;
-            failures.push({
-              point_index: index,
-              error_kind: geoErr?.kind ?? "network",
-              message: geoErr?.message ?? String(err),
-            });
-            return [];
-          }
-        },
-        (done, total) => void notify(done, total),
-      );
-
-      const rawPlaces = perPoint.flat();
-      const clipped = args.clip_to_area
-        ? rawPlaces.filter((p) => inBounds(p.location, bounds) && (!grid.circle || withinCircle(p.location, grid)))
-        : rawPlaces;
-      const unique = dedupePlaces(clipped, args.dedupe_meters);
-
-      const byGov = countBy(unique, (p) => p.address_parts.governorate);
-      const byDistrict = countBy(unique, (p) => p.address_parts.district, 25);
-
-      const stats = {
-        api_calls_made: ctx.client.calls - callsBefore,
-        points_queried: points.length,
-        points_succeeded: points.length - failed,
-        points_failed: failed,
-        raw_results: rawPlaces.length,
-        after_clip: clipped.length,
-        unique_results: unique.length,
-        saturated_points: 0,
-        by_governorate: byGov,
-        by_district: byDistrict,
-        failed_details: failures.length > 0 ? failures : undefined,
-      };
-
-      // The completeness receipt. A sweep claims the tiles are mutually
-      // exclusive after de-duplication and collectively exhaustive over the
-      // bounds; these are the numbers that say whether the claim holds, and
-      // computing them here means a caller is told rather than left to derive
-      // it from stats they may not think to divide.
-      //
-      // Saturation is counted per point, never averaged. An average is the one
-      // shape that hides the case that matters: five downtown cells returning
-      // their maximum while 195 rural cells return nothing averages to a number
-      // that looks healthy, and the five saturated cells are exactly where the
-      // missing places are. Only this side has the per-point counts.
-      const saturatedPoints = perPoint.filter((rows) => rows.length >= args.results_per_point).length;
-      const saturationRatio = round(saturatedPoints / Math.max(1, points.length), 3);
-      const overlapRatio = round(rawPlaces.length / Math.max(1, unique.length), 2);
-      const saturated = saturatedPoints > 0;
-      const tilesIsolated = overlapRatio < 1.15;
-      const notes: string[] = [];
-      if (saturated) {
-        notes.push(
-          `${saturatedPoints} of ${points.length} grid point(s) returned the full ${args.results_per_point} they were allowed and had more to give. The total is a floor: report it as "at least". Raise results_per_point, or sweep those cells again at tighter spacing.`,
-        );
-      }
-      if (tilesIsolated) {
-        notes.push(
-          `Neighbouring tiles barely saw the same places (overlap ${overlapRatio}). Ground between the query points may belong to no tile's reach. Tighten grid_spacing_km.`,
-        );
-      }
-      if (failed > 0) {
-        notes.push(`${failed} grid point(s) returned nothing due to an error; that ground is absent from these results. See stats.failed_details.`);
-      }
-      if (overlapRatio > 4) {
-        notes.push(`Tiles overlap heavily (${overlapRatio}). Coverage is safe but calls are being spent re-reading the same places; a wider grid_spacing_km would cost less.`);
-      }
-      stats.saturated_points = saturatedPoints;
-
-      const completeness = {
-        saturated_points: saturatedPoints,
-        saturation_ratio: saturationRatio,
-        saturated,
-        overlap_ratio: overlapRatio,
-        tiles_isolated: tilesIsolated,
-        edges_checked: false,
-        verdict: saturated ? ("floor" as const) : tilesIsolated || failed > 0 ? ("gaps_likely" as const) : ("bounded" as const),
-        notes,
-        remaining_check:
-          "Edges are not verifiable from inside a sweep: reverse-geocode the four corners and centre of area.bounds, and treat any district found there but absent from stats.by_district as ground the grid stopped short of.",
-      };
-
-      const page = paginate(unique, args.limit, args.offset);
-      const trimmed = args.fields ? page.items.map((p) => pickFields(p, args.fields ?? [])) : page.items;
+      /* ---------- Sweep ---------- */
+      const res = await ctx.client.xSweep({ ...call, shape: args.view === "summary" });
+      const resolvedTo = res.near ?? null;
+      const fullySwept = res.next === undefined;
 
       const base = {
         query: args.query,
         dry_run: false,
+        view: args.view,
         area: areaOut,
-        plan,
-        stats,
-        completeness,
+        resolved_to: resolvedTo,
+        area_fully_swept: fullySwept,
+        ...(res.next !== undefined ? { continue_from: res.next } : {}),
+        ...(res.complete !== undefined ? { results_complete: res.complete } : {}),
+      };
+
+      // Two different ways an answer can be short of the whole truth, and they
+      // are fixed by different parameters. Collapsing them into one "there is
+      // more" would tell a caller to do the wrong thing half the time.
+      //
+      //   ground unvisited  -> the sweep stopped early     -> continue_from
+      //   source not drained-> each point was read shallow -> pages_per_point
+      //
+      // Measured on Zamalek: the default depth returned 100 pharmacies where
+      // draining the same ground returns 218. Neither number knows about the
+      // other, and only this line says so.
+      const caveats: string[] = [];
+      if (!fullySwept) {
+        caveats.push(
+          "The sweep ran out of time with ground still unvisited. Call again with `continue_from` set to the value in this response to cover the rest.",
+        );
+      }
+      if (res.complete === false) {
+        caveats.push(
+          'There were more places at the points it did visit, so **total is a floor** — read it as "at least this many". Raise `pages_per_point` (up to 15) and ask again.',
+        );
+      }
+      const groundNote = caveats.length ? `\n> **Incomplete.** ${caveats.join(" ")}` : "";
+
+      /* ---------- A summary is not a list ---------- */
+      if (args.view === "summary") {
+        const summary = (res.shape ?? {}) as Record<string, unknown>;
+        const structured = {
+          ...base,
+          summary,
+          total: typeof summary.places === "number" ? summary.places : 0,
+          count: 0,
+          offset: 0,
+          has_more: false,
+        };
+        if (args.response_format === "json") return ok(structured, JSON.stringify(structured, null, 2));
+
+        const byDistrict = (summary.by_district ?? {}) as Record<string, number>;
+        const byCategory = (summary.by_category ?? {}) as Record<string, number>;
+        const rating = summary.rating as { mean?: number; rated?: number; unrated?: number } | undefined;
+        const top = (rec: Record<string, number>, n: number): string =>
+          Object.entries(rec)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, n)
+            .map(([k, v]) => `${k || "(unknown)"} ${v}`)
+            .join(" · ") || "n/a";
+        const text = [
+          `# "${args.query}" across ${label}`,
+          groundNote,
+          "",
+          `**${structured.total}** places${res.complete === false ? " — at least, this is a floor" : ""}.`,
+          ...(rating?.mean !== undefined ? [`**Rating**: ${rating.mean} mean across ${rating.rated} rated (${rating.unrated} unrated)`] : []),
+          ...(typeof summary.with_phone === "number" ? [`**With a phone**: ${summary.with_phone} · **with a website**: ${summary.with_website ?? 0} · **open now**: ${summary.open_now ?? 0}`] : []),
+          "",
+          `**Districts** (${Object.keys(byDistrict).length}): ${top(byDistrict, 15)}`,
+          `**Categories**: ${top(byCategory, 10)}`,
+          "",
+          "_Counts only. Re-run with view=\"places\" — or with a district as the area — to list them._",
+        ].join("\n");
+        return ok(structured, text);
+      }
+
+      /* ---------- Places ---------- */
+      const places = normalizeXPlaces(res.places);
+      const page = paginate(places, args.limit, args.offset);
+      const trimmed = args.fields ? page.items.map((p) => pickFields(p, args.fields ?? [])) : page.items;
+      const centreOfMeasure = resolvedTo?.location ?? center;
+
+      const paged = {
+        ...base,
+        ...(centreOfMeasure ? { distance_measured_from: centreOfMeasure } : {}),
         total: page.total,
         count: page.count,
         offset: page.offset,
@@ -483,75 +423,91 @@ Errors: bad_request when the grid exceeds the cap — the hint tells you the sma
         ...(page.next_offset !== undefined ? { next_offset: page.next_offset } : {}),
       };
 
+      const hint = `Use a smaller limit, offset=${args.offset}, fields=["name","location"], or view="summary".`;
+
       if (args.response_format === "geojson") {
-        // Fit by dropping whole features, never by slicing the string: a hard
+        // Fit by dropping whole features, never by cutting the string: a hard
         // character cut produces text that parses as nothing at all, which is
-        // a worse failure than returning fewer features and saying so.
+        // worse than fewer features and a sentence saying so.
         const fitted = fitToLimit(
           page.items,
-          (items) => JSON.stringify({ ...base, geojson: placesToGeoJson(items) }, null, 2),
-          `Use a smaller limit, offset=${args.offset}, or fields=["name","location"].`,
+          (items) => JSON.stringify({ ...paged, geojson: toGeoJson(items) }, null, 2),
+          hint,
         );
-        const structured = {
-          ...base,
-          geojson: placesToGeoJson(fitted.items),
-          count: fitted.items.length,
-          ...(fitted.truncated ? { truncated: true, truncation_message: fitted.truncation_message } : {}),
-        };
-        return ok(structured, fitted.text);
+        return ok(
+          {
+            ...paged,
+            geojson: toGeoJson(fitted.items),
+            count: fitted.items.length,
+            ...(fitted.truncated ? { truncated: true, truncation_message: fitted.truncation_message } : {}),
+          },
+          fitted.text,
+        );
       }
 
-      const render = (items: Partial<Place>[]): string => {
-        if (args.response_format === "json") return JSON.stringify({ ...base, places: items }, null, 2);
+      const render = (items: Partial<XPlace & { name: string }>[]): string => {
+        if (args.response_format === "json") return JSON.stringify({ ...paged, places: items }, null, 2);
         const head = [
-          `# Sweep: "${args.query}" over ${label}`,
-          `_${stats.unique_results} unique places from ${stats.raw_results} raw hits across ${stats.points_queried} grid points (${stats.api_calls_made} API calls${failed ? `, ${failed} failed` : ""})_`,
-          "",
-          `**Completeness**: ${completeness.verdict}${completeness.notes.length ? ` — ${completeness.notes[0]}` : ""}`,
-          `**By governorate**: ${Object.entries(byGov).map(([k, v]) => `${k || "(unknown)"} ${v}`).join(" · ") || "n/a"}`,
-          `**Top districts**: ${Object.entries(byDistrict).slice(0, 10).map(([k, v]) => `${k || "(unknown)"} ${v}`).join(" · ") || "n/a"}`,
+          `# "${args.query}" across ${label}`,
+          groundNote,
+          `_${page.total} found${resolvedTo ? `, around ${resolvedTo.short_address ?? resolvedTo.address ?? label}` : ""}. Distances are straight lines from the sweep's centre, not from you._`,
           "",
         ];
-        const body = items.map((p, i) => (isFullPlace(p) ? placeMarkdown(p, args.offset + i + 1) : `${args.offset + i + 1}. ${JSON.stringify(p)}`));
-        const foot = page.has_more ? `\n_Showing ${page.count} of ${page.total}. Call again with offset=${page.next_offset}._` : `\n_Showing all ${page.total}._`;
+        const body = items.map((p, i) => placeLine(p, args.offset + i + 1));
+        const foot = page.has_more
+          ? `\n_Showing ${page.count} of ${page.total}. Call again with offset=${page.next_offset} — same sweep, no extra cost._`
+          : res.complete === false
+            ? `\n_Showing all ${page.total} that were found — at least this many exist._`
+            : `\n_Showing all ${page.total}._`;
         return [...head, ...body, foot].join("\n");
       };
 
-      const fitted = fitToLimit(trimmed, render, `Use a smaller limit, offset=${args.offset}, or fields=["name","location"].`);
+      const fitted = fitToLimit(trimmed, render, hint);
       return ok(
-        { ...base, places: fitted.items, count: fitted.items.length, ...(fitted.truncated ? { truncated: true, truncation_message: fitted.truncation_message } : {}) },
+        {
+          ...paged,
+          places: fitted.items,
+          count: fitted.items.length,
+          ...(fitted.truncated ? { truncated: true, truncation_message: fitted.truncation_message } : {}),
+        },
         fitted.text,
       );
     }),
   );
 }
 
-function withinCircle(p: LatLng, grid: GridOptions): boolean {
-  if (!grid.circle) return true;
-  return haversineKm(grid.circle.center, p) <= grid.circle.radiusKm;
-}
+type XPlaceOut = XPlace & { name: string };
 
-function countBy(places: Place[], key: (p: Place) => string, top?: number): Record<string, number> {
-  const counts = new Map<string, number>();
-  for (const p of places) {
-    const k = key(p) || "";
-    counts.set(k, (counts.get(k) ?? 0) + 1);
-  }
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  return Object.fromEntries(top ? sorted.slice(0, top) : sorted);
-}
-
-function pickFields(p: Place, fields: PlaceFieldT[]): Partial<Place> {
-  const out: Partial<Place> = {};
+function pickFields(p: XPlaceOut, fields: PlaceFieldT[]): Partial<XPlaceOut> {
+  const out: Partial<XPlaceOut> = {};
   for (const f of fields) {
-    if (f === "name") out.name = p.name;
-    else if (f === "address") out.address = p.address;
-    else if (f === "address_parts") out.address_parts = p.address_parts;
-    else if (f === "location") out.location = p.location;
+    const v = (p as unknown as Record<string, unknown>)[f];
+    if (v !== undefined) (out as Record<string, unknown>)[f] = v;
   }
   return out;
 }
 
-function isFullPlace(p: Partial<Place>): p is Place {
-  return typeof p.name === "string" && typeof p.address === "string" && p.address_parts !== undefined && p.location !== undefined;
+function placeLine(p: Partial<XPlaceOut>, index: number): string {
+  const bits: string[] = [];
+  if (p.category) bits.push(p.category);
+  if (p.rating) bits.push(`★ ${p.rating.value} (${p.rating.count})`);
+  if (p.distance_m !== null && p.distance_m !== undefined) bits.push(`${(p.distance_m / 1000).toFixed(1)} km`);
+  if (p.hours?.open_now === true) bits.push("open now");
+  const lines = [`${index}. **${p.name ?? "(unnamed)"}**${bits.length ? ` — ${bits.join(" · ")}` : ""}`];
+  if (p.address) lines.push(`   ${p.address}`);
+  const contact = [p.phone, p.website].filter(Boolean).join(" · ");
+  if (contact) lines.push(`   ${contact}`);
+  if (p.location) lines.push(`   \`${formatLatLng(p.location)}\``);
+  return lines.join("\n");
+}
+
+function toGeoJson(places: XPlaceOut[]) {
+  return placesToGeoJson(
+    places.map((p) => ({
+      name: p.name,
+      address: p.address ?? "",
+      address_parts: p.address_parts,
+      location: p.location,
+    })),
+  );
 }

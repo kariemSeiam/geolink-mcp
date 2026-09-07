@@ -6,6 +6,8 @@ import {
   RETRY_BASE_MS,
   SERVER_NAME,
   SERVER_VERSION,
+  SWEEP_CACHE_ENTRIES,
+  SWEEP_CACHE_TTL_MS,
   UPSTREAM_PAGE_SIZE,
 } from "../constants.js";
 import type { Config } from "../config.js";
@@ -161,15 +163,31 @@ function classify(status: number, message: string, code?: string | null): GeoLin
  */
 const sharedCache = new TtlCache<unknown>(CACHE_MAX_ENTRIES, CACHE_TTL_MS);
 
+/**
+ * Sweeps get their own shelf, and a short one.
+ *
+ * A sweep of Cairo comes back as one envelope holding every place it found -
+ * measured at 1.1 MB for 867 pharmacies. Paging that with offset has to serve
+ * page two from somewhere, and re-running the sweep for it would spend the
+ * whole cost again for results already in hand. But five hundred of those in
+ * the shared cache is half a gigabyte of resident memory, so a count tuned for
+ * geocodes is the wrong count here. Few entries, held only long enough for a
+ * caller to page through what they just asked for.
+ */
+const sweepCache = new TtlCache<unknown>(SWEEP_CACHE_ENTRIES, SWEEP_CACHE_TTL_MS);
+
 export class GeoLinkClient {
   private readonly cache: TtlCache<unknown>;
+  private readonly sweeps: TtlCache<unknown>;
   private callCount = 0;
 
   constructor(
     private readonly cfg: Config,
     cache: TtlCache<unknown> = sharedCache,
+    sweeps: TtlCache<unknown> = sweepCache,
   ) {
     this.cache = cache;
+    this.sweeps = sweeps;
   }
 
   /** Number of live HTTP calls made by this process (cache hits excluded). */
@@ -193,8 +211,9 @@ export class GeoLinkClient {
     seen?: { headers?: Headers },
     keepEnvelope = false,
   ): Promise<T> {
+    const shelf = keepEnvelope ? this.sweeps : this.cache;
     if (cacheKey) {
-      const hit = this.cache.get(cacheKey);
+      const hit = shelf.get(cacheKey);
       if (hit !== undefined) return hit as T;
     }
 
@@ -208,7 +227,7 @@ export class GeoLinkClient {
         await new Promise((resolve) => setTimeout(resolve, backoff + Math.random() * backoff));
       }
       try {
-        return await this.attempt<T>(path, params, cacheKey, seen, keepEnvelope);
+        return await this.attempt<T>(path, params, cacheKey, seen, keepEnvelope, shelf);
       } catch (err) {
         if (!(err instanceof GeoLinkError) || !GeoLinkClient.RETRYABLE.has(err.kind)) throw err;
         lastError = err;
@@ -241,6 +260,7 @@ export class GeoLinkClient {
     cacheKey?: string,
     seen?: { headers?: Headers },
     keepEnvelope = false,
+    shelf: TtlCache<unknown> = this.cache,
   ): Promise<T> {
 
     const url = new URL(path, `${this.cfg.baseUrl}/`);
@@ -317,12 +337,29 @@ export class GeoLinkClient {
     // indistinguishable from a complete one.
     if (seen) seen.headers = res.headers;
 
-    if (cacheKey) this.cache.set(cacheKey, body.data);
+    // Whether an x answer is all of them arrives in a header, and it is folded
+    // into the body here rather than read at the call site. If it were read
+    // separately, the first call would have it and every cache hit after would
+    // not - page two of a truncated sweep would quietly claim to be complete.
+    // Attaching it before the body is cached makes that impossible to get
+    // wrong: the flag and the places are one object from here on.
+    if (keepEnvelope && body && typeof body === "object") {
+      const flag = res.headers.get("x-geolink-results-complete");
+      if (flag !== null) (body as Record<string, unknown>).results_complete = flag === "true";
+    }
 
     // v1 and v2 put everything in `data`, so unwrapping it is right for them.
     // x puts `total`, `near` and `next` beside it, and unwrapping first threw
     // those away - the sweep cursor and the resolved place among them.
-    return (keepEnvelope ? body : body.data) as T;
+    const value = (keepEnvelope ? body : body.data) as T;
+
+    // Cache what is actually returned, not what a v1 answer happens to be.
+    // Storing body.data under an envelope-keeping call put an array where the
+    // next hit expected an envelope: the places survived and `total`, `near`
+    // and `next` vanished, on the second call only, silently.
+    if (cacheKey) shelf.set(cacheKey, value);
+
+    return value;
   }
 
   /* ---------------- Endpoint wrappers ---------------- */
@@ -383,8 +420,8 @@ export class GeoLinkClient {
   /* ---------------- The x surface ---------------- */
 
   /** An x call, envelope kept: total, near and next sit beside data, not in it. */
-  private xRequest(path: string, params: Params): Promise<any> {
-    return this.request<any>(path, params, undefined, undefined, true);
+  private xRequest(path: string, params: Params, cacheKey?: string): Promise<any> {
+    return this.request<any>(path, params, cacheKey, undefined, true);
   }
 
   private unwrapX(body: any, shape = false) {
@@ -395,6 +432,12 @@ export class GeoLinkClient {
       total: typeof body?.total === "number" ? body.total : undefined,
       near: body?.near as XNear | undefined,
       next: body?.next as string | undefined,
+      // Undefined where the API did not say - which is honest. Defaulting it
+      // to true would be a claim nobody made, and true is the answer that
+      // stops a caller looking.
+      complete: typeof body?.results_complete === "boolean"
+        ? (body.results_complete as boolean)
+        : undefined,
     };
   }
 
@@ -458,6 +501,22 @@ export class GeoLinkClient {
     cursor?: string;
     dryRun?: boolean;
   }) {
+    // A sweep is expensive and its whole result arrives at once, so paging it
+    // must not ask for it twice. Everything that changes the answer is in the
+    // key; `limit` and `offset` are not, because they only choose which part
+    // of this same answer a caller is shown. A dry run is keyed apart from a
+    // real one - it is a different question about the same area.
+    const cacheKey = opts.dryRun
+      ? undefined
+      : [
+          this.cfg.baseUrl, "xsweep", opts.language, opts.country,
+          opts.query.trim().toLowerCase(),
+          opts.near ?? "", opts.center ? `${opts.center.lat},${opts.center.lng}` : "",
+          opts.radiusKm ?? "", opts.bounds ?? "",
+          opts.pagesPerPoint ?? "", opts.spacingKm ?? "",
+          opts.shape ? "shape" : "full", opts.cursor ?? "",
+        ].join("|");
+
     const body = await this.xRequest(ENDPOINTS.xSweep, {
       query: opts.query,
       near: opts.near,
@@ -472,11 +531,12 @@ export class GeoLinkClient {
       view: opts.shape ? "shape" : undefined,
       next: opts.cursor,
       dry_run: opts.dryRun ? "true" : undefined,
-    });
+    }, cacheKey);
     if (opts.dryRun) {
+      // A dry run searched nothing, so it is not complete or incomplete.
       return { places: [] as XPlace[], shape: undefined, total: undefined,
                near: body?.near as XNear | undefined, next: undefined,
-               plan: body?.data };
+               complete: undefined, plan: body?.data };
     }
     return { ...this.unwrapX(body, opts.shape), plan: undefined };
   }

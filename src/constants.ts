@@ -69,6 +69,14 @@ export const DEFAULT_GRID_SPACING_KM = 3;
 export const CACHE_MAX_ENTRIES = 500;
 export const CACHE_TTL_MS = 10 * 60 * 1000;
 
+// A sweep envelope is the whole area's places in one object - 1.1 MB measured
+// for 867 of them. These exist so that paging with offset does not re-run the
+// sweep, which is a job of a few seconds and a few hundred upstream reads.
+// Six is enough for a caller working through one or two areas; more would
+// trade megabytes for a hit rate nobody needs.
+export const SWEEP_CACHE_ENTRIES = 6;
+export const SWEEP_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export const ENDPOINTS = {
   geocode: "/api/v2/geocode",
   reverseGeocode: "/api/v2/reverse_geocode",
