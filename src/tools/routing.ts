@@ -666,7 +666,10 @@ Examples:
         origin,
         source: "candidates" as const,
         rank_by: args.rank_by,
-        candidates_evaluated: candidates.length,
+        // What survived, not what was sent. A candidate with no route is
+        // dropped before ranking, and counting it here would say we weighed
+        // options we could not measure.
+        candidates_evaluated: ranked.length,
         results: ranked,
         ...(mismatched > 0
           ? {

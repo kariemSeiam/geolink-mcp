@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_LANGUAGE } from "../constants.js";
 import type { Config } from "../config.js";
 import type { LatLng, ResolvedLocation } from "../types.js";
 import { GeoLinkClient, GeoLinkError } from "./client.js";
@@ -27,13 +28,17 @@ export const languageParam = z
   .string()
   .length(2)
   .optional()
-  .describe('Two-letter language for results, e.g. "ar" or "en". Defaults to the server default (usually "ar").');
+  .describe(
+    `Two-letter language for results, e.g. "ar" or "en". Defaults to this server's GEOLINK_DEFAULT_LANGUAGE (shipped default "${DEFAULT_LANGUAGE}"). Arabic and English indexes do not hold identical sets — a query that finds nothing in one is worth repeating in the other.`,
+  );
 
 export const countryParam = z
   .string()
   .length(2)
   .optional()
-  .describe('Two-letter country code to focus results / routing, e.g. "eg". Defaults to the server default (usually "eg").');
+  .describe(
+    `Two-letter country code to focus results, e.g. "eg". Defaults to this server's GEOLINK_DEFAULT_COUNTRY, which ships empty — but an empty country does not mean "worldwide": the upstream falls back to its own bias when none is given. Pass one explicitly whenever the answer should not be Egypt.`,
+  );
 
 export enum ResponseFormat {
   MARKDOWN = "markdown",

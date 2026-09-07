@@ -18,17 +18,35 @@ export {
   SKILL_OVERVIEW,
 } from "./playbook.generated.js";
 
-/** Measured 2026-09-03 against geolink-eg.com from a single client. */
+/**
+ * Measured 2026-09-07 against geolink-eg.com from a single client.
+ *
+ * The `requests` column is what *this client* spends, and it is now 1 almost
+ * everywhere: paging, the grid and the road-ranking all moved server-side. The
+ * previous version of this table counted 16 requests for a deep search, which
+ * described a client that no longer exists. Cost did not vanish - it moved to
+ * where a time budget can bound it, which is why `complete` matters more than
+ * `requests` now.
+ */
 export const MEASUREMENTS = {
-  measured_on: "2026-09-03",
+  measured_on: "2026-09-07",
   upstream: "geolink-eg.com",
   note: "Observed from one client on one network. Treat as the shape of the cost curve, not a service guarantee.",
+  requests_note: "`requests` is what this client sends. The API pages internally behind each one and bounds itself by time, not by a call count.",
   search: [
-    { results: 20, upstream_requests: 1, seconds: 1.2, note: "one page, the default" },
-    { results: 80, upstream_requests: 4, seconds: 1.2, note: "requests run in parallel, so latency barely moves" },
-    { results: 300, upstream_requests: 16, seconds: 6.9, note: "dense category, ran to exhaustion" },
-    { results: 16, upstream_requests: 2, seconds: 0.8, note: "sparse query — stopped early because the area ran out" },
+    { results: 20, requests: 1, seconds: 1.2, complete: false, note: "one page, the default — and `complete: false` says so" },
+    { results: 215, requests: 1, seconds: 5.9, complete: true, note: "limit=0, read until the source ran dry. The only way to a true count for one point" },
   ],
+  sweep: [
+    { results: 100, requests: 1, seconds: 1.0, complete: false, note: "10 km, default depth — a floor, not a total" },
+    { results: 212, requests: 1, seconds: 3.0, complete: true, note: "the same ground at pages_per_point=15" },
+    { results: 817, requests: 1, seconds: 2.3, complete: false, note: "20 km around Giza; more ground, still one request" },
+  ],
+  nearest: [
+    { candidates: 10, requests: 1, seconds: 1.1, note: "found, measured by road and ranked in one call" },
+  ],
+  completeness_note:
+    "The default sweep of Zamalek returns 100 where draining the same ground returns 212 — 47% of the answer. Both are honest only because `results_complete` distinguishes them.",
   reliability: {
     partial_page_rate_sparse: 0.25,
     partial_page_rate_dense: 0.0,
