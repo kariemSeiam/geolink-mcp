@@ -1,7 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { guarded, ok, placeMarkdown } from "../services/format.js";
-import { inBounds } from "../services/geo.js";
 import {
   countryParam,
   languageParam,
@@ -35,7 +34,7 @@ export function registerGeocodingTools(server: McpServer, ctx: ToolContext): voi
     "geolink_geocode",
     {
       title: "Geocode an address",
-      description: `Convert an address or place name into coordinates, with structured address parts (district, governorate, country) and a viewport bounding box.
+      description: `Convert an address or place name into coordinates, with structured address parts (district, governorate, country).
 
 Returns exactly one best match. For a ranked list of candidates use geolink_search_places instead.
 
@@ -50,9 +49,12 @@ Returns (structuredContent):
     "name": string,            // short name, e.g. "Cairo Tower"
     "address": string,         // full formatted address
     "address_parts": { "district": string, "governorate": string, "country": "EG" },
-    "location": { "lat": number, "lng": number },
-    "bounds": { "northeast": {lat,lng}, "southwest": {lat,lng} }   // viewport, if available
+    "location": { "lat": number, "lng": number }
   }
+
+There is no viewport. GeoLink holds no boundary geometry, so a geocode answers
+"where is this point", never "how far does this place reach". To cover ground
+around it, give geolink_sweep_area a centre and a radius you chose.
 
 Examples:
   - "Where is Cairo Tower?" -> query="Cairo Tower"
@@ -61,34 +63,29 @@ Examples:
 
 Errors: not_found if nothing matches — try adding the district/governorate or switching language.`,
       inputSchema: GeocodeShape,
-      outputSchema: {
-        ...PlaceSchema.shape,
-        location_within_bounds: z.boolean().optional(),
-        warning: z.string().optional(),
-      },
+      outputSchema: { ...PlaceSchema.shape },
       annotations: READ_ONLY,
     },
     guarded(async (raw: z.infer<typeof GeocodeInput>) => {
       const args = GeocodeInput.parse(raw);
       const place = await ctx.client.geocode(args.query, pickLang(ctx, args.language), pickCountry(ctx, args.country));
-      // A result whose own point sits outside its own viewport is not a match,
-      // it is a fallback to something larger — a city standing in for a street
-      // the geocoder could not find. Nothing else in the response says so.
-      const consistent = place.bounds ? inBounds(place.location, place.bounds) : true;
-      const result = {
-        ...place,
-        ...(place.bounds ? { location_within_bounds: consistent } : {}),
-        ...(consistent
-          ? {}
-          : {
-              warning:
-                "The returned point falls outside the returned viewport, which usually means the geocoder fell back to a larger place rather than matching what was asked for. Confirm with geolink_search_places before building on this coordinate.",
-            }),
-      };
+
+      // There used to be a consistency check here: a point outside its own
+      // viewport means the geocoder fell back to something larger. It read
+      // well and it could never fail. The viewport it tested was the point
+      // plus a fixed 0.001 degrees, so the point sat at the exact centre of it
+      // every time — `location_within_bounds: true` on every response ever
+      // returned, and a warning that had no path to firing.
+      //
+      // A check that cannot fail is worse than no check: it reports a green
+      // light for something nobody verified. The client now drops that box
+      // when the API marks it synthetic, so there is no viewport here to test
+      // and nothing pretending there is.
+      const result = { ...place };
       const text =
         args.response_format === ResponseFormat.JSON
           ? JSON.stringify(result, null, 2)
-          : `# Geocode: "${args.query}"\n\n${placeMarkdown(place)}${consistent ? "" : "\n\n_Point falls outside its own viewport — likely a fallback to a larger place._"}`;
+          : `# Geocode: "${args.query}"\n\n${placeMarkdown(place)}`;
       return ok(result, text);
     }),
   );
@@ -109,7 +106,7 @@ Errors: not_found if nothing matches — try adding the district/governorate or 
     "geolink_reverse_geocode",
     {
       title: "Reverse geocode coordinates",
-      description: `Convert latitude/longitude into a human-readable address with structured address parts (district, governorate, country) and a viewport bounding box.
+      description: `Convert latitude/longitude into a human-readable address with structured address parts (district, governorate, country).
 
 Args:
   - latitude (number), longitude (number): The point to describe.
@@ -118,7 +115,7 @@ Args:
   - response_format ('markdown' | 'json'): Text rendering. Default: markdown.
 
 Returns (structuredContent): same Place shape as geolink_geocode:
-  { name, address, address_parts: {district, governorate, country}, location: {lat, lng}, bounds? }
+  { name, address, address_parts: {district, governorate, country}, location: {lat, lng} }
 
 Examples:
   - "What's at 30.0459, 31.2243?" -> latitude=30.0459, longitude=31.2243

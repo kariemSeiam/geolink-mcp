@@ -62,15 +62,6 @@ export function formatLatLng(p: LatLng, decimals = 5): string {
 /* Bounds                                                              */
 /* ------------------------------------------------------------------ */
 
-export function inBounds(p: LatLng, b: Bounds): boolean {
-  return (
-    p.lat >= b.southwest.lat &&
-    p.lat <= b.northeast.lat &&
-    p.lng >= b.southwest.lng &&
-    p.lng <= b.northeast.lng
-  );
-}
-
 /** Evenly sample a path down to at most `max` points, always keeping first and last. */
 export function samplePoints<T>(points: T[], max: number): T[] {
   if (max < 2 || points.length <= max) return points;

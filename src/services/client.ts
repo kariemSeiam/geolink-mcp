@@ -342,6 +342,20 @@ export class GeoLinkClient {
     // indistinguishable from a complete one.
     if (seen) seen.headers = res.headers;
 
+    // A geocode's `bounds` is the point plus a fixed 0.001 degrees - the same
+    // 190 x 220 metre box for a governorate as for one building - and the API
+    // now says so with X-GeoLink-Bounds: synthetic. It is dropped here rather
+    // than passed along and explained downstream, because a field that means
+    // nothing is not improved by a caveat beside it: something will eventually
+    // read the numbers and not the caveat. Nothing in this server can be misled
+    // by a viewport that never arrives.
+    if (
+      res.headers.get("x-geolink-bounds") === "synthetic" &&
+      body?.data && typeof body.data === "object" && "bounds" in body.data
+    ) {
+      delete (body.data as Record<string, unknown>).bounds;
+    }
+
     // Whether an x answer is all of them arrives in a header, and it is folded
     // into the body here rather than read at the call site. If it were read
     // separately, the first call would have it and every cache hit after would

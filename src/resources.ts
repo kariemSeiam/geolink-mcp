@@ -53,7 +53,7 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
           sweep_pages_per_point: "the API's own default",
         },
         tools: {
-          geolink_geocode: "address or name → one place. Its `bounds` are the point plus a fixed 0.001° — not a viewport, and never an area to sweep",
+          geolink_geocode: "address or name → one point. There is no viewport — GeoLink holds no boundary geometry, so an area is always a centre and a radius you chose",
           geolink_reverse_geocode: "lat,lng → address with district and governorate",
           geolink_search_places: "text query around one center → places with rating, phone, hours and category; limit=0 reads until the source runs dry",
           geolink_get_directions: "A → B routes; geometry opt-in (summary | polyline | waypoints)",
