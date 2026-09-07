@@ -6,8 +6,8 @@ import {
   RETRY_BASE_MS,
   SERVER_NAME,
   SERVER_VERSION,
-  SWEEP_CACHE_ENTRIES,
-  SWEEP_CACHE_TTL_MS,
+  ANSWER_CACHE_ENTRIES,
+  ANSWER_CACHE_TTL_MS,
   UPSTREAM_PAGE_SIZE,
 } from "../constants.js";
 import type { Config } from "../config.js";
@@ -164,30 +164,35 @@ function classify(status: number, message: string, code?: string | null): GeoLin
 const sharedCache = new TtlCache<unknown>(CACHE_MAX_ENTRIES, CACHE_TTL_MS);
 
 /**
- * Sweeps get their own shelf, and a short one.
+ * Whole answers get their own shelf, and a short one.
  *
  * A sweep of Cairo comes back as one envelope holding every place it found -
- * measured at 1.1 MB for 867 pharmacies. Paging that with offset has to serve
- * page two from somewhere, and re-running the sweep for it would spend the
- * whole cost again for results already in hand. But five hundred of those in
- * the shared cache is half a gigabyte of resident memory, so a count tuned for
- * geocodes is the wrong count here. Few entries, held only long enough for a
- * caller to page through what they just asked for.
+ * measured at 1.1 MB for 867 pharmacies - and a deep search is the same shape,
+ * smaller. Paging either with offset has to serve page two from somewhere, and
+ * re-running the work for it would spend the whole cost again for results
+ * already in hand. But five hundred of those in the shared cache is half a
+ * gigabyte of resident memory, so a count tuned for geocodes is the wrong count
+ * here. Few entries, held only long enough for a caller to page through what
+ * they just asked for.
+ *
+ * Which shelf a call uses is passed in, not inferred. It was briefly inferred
+ * from `keepEnvelope`, which is true for every x call - so a cached search
+ * would have evicted the sweep a caller was still paging through.
  */
-const sweepCache = new TtlCache<unknown>(SWEEP_CACHE_ENTRIES, SWEEP_CACHE_TTL_MS);
+const answerCache = new TtlCache<unknown>(ANSWER_CACHE_ENTRIES, ANSWER_CACHE_TTL_MS);
 
 export class GeoLinkClient {
   private readonly cache: TtlCache<unknown>;
-  private readonly sweeps: TtlCache<unknown>;
+  private readonly answers: TtlCache<unknown>;
   private callCount = 0;
 
   constructor(
     private readonly cfg: Config,
     cache: TtlCache<unknown> = sharedCache,
-    sweeps: TtlCache<unknown> = sweepCache,
+    answers: TtlCache<unknown> = answerCache,
   ) {
     this.cache = cache;
-    this.sweeps = sweeps;
+    this.answers = answers;
   }
 
   /** Number of live HTTP calls made by this process (cache hits excluded). */
@@ -210,8 +215,8 @@ export class GeoLinkClient {
     cacheKey?: string,
     seen?: { headers?: Headers },
     keepEnvelope = false,
+    shelf: TtlCache<unknown> = this.cache,
   ): Promise<T> {
-    const shelf = keepEnvelope ? this.sweeps : this.cache;
     if (cacheKey) {
       const hit = shelf.get(cacheKey);
       if (hit !== undefined) return hit as T;
@@ -421,7 +426,7 @@ export class GeoLinkClient {
 
   /** An x call, envelope kept: total, near and next sit beside data, not in it. */
   private xRequest(path: string, params: Params, cacheKey?: string): Promise<any> {
-    return this.request<any>(path, params, cacheKey, undefined, true);
+    return this.request<any>(path, params, cacheKey, undefined, true, this.answers);
   }
 
   private unwrapX(body: any, shape = false) {
@@ -460,6 +465,17 @@ export class GeoLinkClient {
     limit?: number;
     shape?: boolean;
   }) {
+    // Cached for the same reason a sweep is: `limit: 0` walks a point until it
+    // runs dry, which can be two hundred places and several seconds, and asking
+    // for page two must not do it twice. limit and offset stay out of the key -
+    // they choose which part of this same answer is shown.
+    const cacheKey = [
+      this.cfg.baseUrl, "xsearch", opts.language, opts.country,
+      opts.query.trim().toLowerCase(),
+      opts.near ?? "", opts.center ? `${opts.center.lat},${opts.center.lng}` : "",
+      opts.limit ?? "", opts.shape ? "shape" : "full",
+    ].join("|");
+
     const body = await this.xRequest(ENDPOINTS.xSearch, {
       query: opts.query,
       near: opts.near,
@@ -470,7 +486,7 @@ export class GeoLinkClient {
       country: opts.country,
       limit: opts.limit,
       view: opts.shape ? "shape" : undefined,
-    });
+    }, cacheKey);
     return this.unwrapX(body, opts.shape);
   }
 

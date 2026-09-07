@@ -438,7 +438,7 @@ Examples:
           {
             ...paged,
             geojson: toGeoJson(fitted.items),
-            count: fitted.items.length,
+            ...withCut(paged, fitted.items.length, args.offset),
             ...(fitted.truncated ? { truncated: true, truncation_message: fitted.truncation_message } : {}),
           },
           fitted.text,
@@ -467,7 +467,7 @@ Examples:
         {
           ...paged,
           places: fitted.items,
-          count: fitted.items.length,
+          ...withCut(paged, fitted.items.length, args.offset),
           ...(fitted.truncated ? { truncated: true, truncation_message: fitted.truncation_message } : {}),
         },
         fitted.text,
@@ -477,6 +477,20 @@ Examples:
 }
 
 type XPlaceOut = XPlace & { name: string };
+
+/**
+ * Pagination after the response had to be trimmed to fit.
+ *
+ * Dropping places to stay under the size limit is another way of not showing
+ * all of them, so it has to move has_more with it. Without this a response cut
+ * from 218 places to 109 still said has_more: false, which tells a caller they
+ * are holding everything when they are holding half.
+ */
+function withCut(paged: { count: number; has_more: boolean }, shown: number, offset: number) {
+  return shown < paged.count
+    ? { count: shown, has_more: true, next_offset: offset + shown }
+    : { count: shown };
+}
 
 function pickFields(p: XPlaceOut, fields: PlaceFieldT[]): Partial<XPlaceOut> {
   const out: Partial<XPlaceOut> = {};

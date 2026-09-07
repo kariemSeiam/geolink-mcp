@@ -36,6 +36,14 @@ export const UPSTREAM_PAGE_SIZE = 20;
  */
 export const DEEP_SEARCH_ADVISORY = 200;
 
+/**
+ * What a search returns when nobody says. One page of the source, which is
+ * enough to answer "what is near here" and cheap enough to be the wrong answer
+ * to nothing. Asking "how many are there" is a different question and takes
+ * limit=0, which reads the point until it runs dry.
+ */
+export const DEFAULT_SEARCH_LIMIT = UPSTREAM_PAGE_SIZE;
+
 /** Kilometres per degree of latitude (constant); longitude scales with cos(lat). */
 export const KM_PER_DEG_LAT = 111.32;
 
@@ -69,13 +77,13 @@ export const DEFAULT_GRID_SPACING_KM = 3;
 export const CACHE_MAX_ENTRIES = 500;
 export const CACHE_TTL_MS = 10 * 60 * 1000;
 
-// A sweep envelope is the whole area's places in one object - 1.1 MB measured
-// for 867 of them. These exist so that paging with offset does not re-run the
-// sweep, which is a job of a few seconds and a few hundred upstream reads.
-// Six is enough for a caller working through one or two areas; more would
-// trade megabytes for a hit rate nobody needs.
-export const SWEEP_CACHE_ENTRIES = 6;
-export const SWEEP_CACHE_TTL_MS = 5 * 60 * 1000;
+// A sweep envelope is a whole area's places in one object - 1.1 MB measured
+// for 867 of them - and a deep search is the same shape. These exist so that
+// paging with offset does not repeat work that took seconds and hundreds of
+// upstream reads. Six is enough for a caller working through one or two
+// questions; more would trade megabytes for a hit rate nobody needs.
+export const ANSWER_CACHE_ENTRIES = 6;
+export const ANSWER_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const ENDPOINTS = {
   geocode: "/api/v2/geocode",
