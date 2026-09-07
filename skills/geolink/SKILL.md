@@ -77,9 +77,11 @@ the wrong place.
 The place tools resolve names themselves and report the result as `resolved_to`.
 **Read it back** — that field is the whole check, and skipping it is how a sweep
 of the wrong Nasr City comes out looking perfect.
-[recipes.md](references/recipes.md) has the confidence test;
-[tripwires.md](references/tripwires.md) §7 covers using a geocoded area as a
-sweep boundary. A viewport is not a border.
+[recipes.md](references/recipes.md) has the confidence test.
+
+An area is a centre and a radius you chose, never a name on its own — GeoLink
+holds no boundary geometry, and the `bounds` a geocode returns are a fixed-size
+box identical for a governorate and a district. [tripwires.md](references/tripwires.md) §7.
 
 ## Gate 3 — Budget
 

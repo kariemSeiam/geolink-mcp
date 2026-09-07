@@ -68,9 +68,11 @@ the wrong place.
 The place tools resolve names themselves and report the result as \`resolved_to\`.
 **Read it back** — that field is the whole check, and skipping it is how a sweep
 of the wrong Nasr City comes out looking perfect.
-[recipes.md](references/recipes.md) has the confidence test;
-[tripwires.md](references/tripwires.md) §7 covers using a geocoded area as a
-sweep boundary. A viewport is not a border.
+[recipes.md](references/recipes.md) has the confidence test.
+
+An area is a centre and a radius you chose, never a name on its own — GeoLink
+holds no boundary geometry, and the \`bounds\` a geocode returns are a fixed-size
+box identical for a governorate and a district. [tripwires.md](references/tripwires.md) §7.
 
 ## Gate 3 — Budget
 
@@ -283,17 +285,21 @@ and applying the wrong remedy leaves the other one silently in place.
 
 ## 4. The edges — the one test nothing inside a sweep can run
 
-A named area gets its bounds from the geocoder's viewport, which is often tighter
-than the administrative boundary. Nothing inside a sweep can see what its own
-bounds left out.
+Ground is a centre and a radius, or a box you chose. There is no third option:
+GeoLink holds no boundary geometry, and the \`bounds\` a geocode returns are the
+point plus a fixed 0.001 degrees — the same 190 x 220 m box for Giza as for a
+single district (tripwire 7). So "all of Giza" is always a radius somebody
+picked, and the only question is whether it was picked well.
 
-**The test:** reverse-geocode the four corners and the centre of the area. If a
-corner comes back with a district that never appears in the \`by_district\`
-breakdown, the sweep stopped short of ground that belongs to the area.
+**The test:** reverse-geocode the four corners and the centre of the ground you
+covered. If a corner comes back with a district that never appears in the
+\`by_district\` breakdown, the radius stopped short of ground that belongs to the
+question.
 
-**The fix:** sweep that district by name as its own area, and add the result.
-There is no padding parameter any more — the area you name is the area you get,
-which is one fewer knob and one fewer thing to get subtly wrong.
+**The fix:** raise \`radius_km\`, or sweep the missing district as its own centre
+and add the result. State the radius in the answer — "all pharmacies within
+20 km of Giza" is a claim someone can check; "all pharmacies in Giza" is not,
+because nothing here knows where Giza ends.
 
 ## Reading the answer like an inspector
 
@@ -577,25 +583,37 @@ explicitly declined, and any total still short is reported as "at least N".
 
 ---
 
-## 7. The viewport is not the boundary
+## 7. There is no boundary, and the field named like one is a constant
 
-**What happened.** A named area's bounds come from the geocoder's viewport, which
-is a display rectangle, not an administrative border. It is frequently tighter
-than the real area — a district's viewport can exclude the streets along its own
-edge — and occasionally far looser, when a small place falls back to its parent
-city's box.
+**What happened.** A sweep took a named area and covered "its geocoded
+viewport". A geocode returns a \`bounds\` object, so this looked well-founded for
+as long as nobody measured it. \`bounds\` is the point plus a fixed 0.001 degrees
+in each direction: **Giza, Cairo and Nasr City all come back as the same
+190 x 220 metre rectangle.** It is not a viewport, it is decoration with a
+plausible name.
 
-**Why here.** The source returns what a map would show, not what a boundary file
-would define. There is no boundary geometry in this API at all.
+So \`area: {place: "Giza"}\` swept a box the size of a city block and reported it
+as a governorate — the exact failure the whole method exists to prevent, in the
+invocation the documentation led with. It survived because a 220 m box still
+returns a lot of pharmacies: the search's own reach carries far beyond the
+bounds, so the answer looked healthy and was about ground nobody had specified.
 
-**The check.** Reverse-geocode the four corners and the centre of the bounds. A
-corner returning a district absent from your results is ground the sweep stopped
-short of; one returning a *different city* means the viewport is far too loose
-and the area needs \`{center, radius_km}\` instead.
+**Why here.** The field is not lying, it is answering a smaller question than
+its name implies, and the earlier version of this tripwire repeated the
+misreading — "often tighter than the administrative boundary" is what you write
+when you assume the number is a real viewport that happens to be conservative.
+A field that is the same for a governorate and a district is not conservative.
+It is not a measurement at all.
 
-**Passes when:** the corners have been probed, and any district found there but
-missing from the results has been swept by name as its own area and added. There
-is no padding parameter — the area you name is the area you get.
+**The check.** Geocode two places of wildly different size and compare the
+extent of their bounds. If the boxes are the same, \`bounds\` is a constant, and
+anything that treats it as an area is measuring nothing. More generally: before
+building on a field, confirm it varies with the thing it claims to describe.
+
+**Passes when:** no area is derived from a geocode. Ground is given as
+\`{center, radius_km}\` or \`{bounds}\` you chose — GeoLink holds no boundary
+geometry, so "all of Giza" is always a radius someone picked, and the radius is
+stated in the answer rather than implied by a place name.
 
 ---
 
@@ -725,7 +743,7 @@ with \`node scripts/probe.mjs\` rather than trusting the page — the upstream m
 | \`geolink_get_directions\` | 1, +1 per endpoint given as a name |
 | \`geolink_distance_matrix\` | **1, whatever the grid size**, +1 per named location |
 | \`geolink_find_nearest\` | **1** in search mode; 1 matrix + geocodes when you pass a list |
-| \`geolink_sweep_area\` | **1 per call**; \`dry_run\` says how many calls the whole area needs. +1 geocode when the area is \`{place}\` |
+| \`geolink_sweep_area\` | **1 per call**; \`dry_run\` says how many calls the whole area needs |
 
 Three of those became 1 when the paging, the grid and the road-ranking moved
 server-side. What used to cost this client sixteen requests for a deep search is

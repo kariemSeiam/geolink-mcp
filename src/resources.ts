@@ -53,7 +53,7 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
           sweep_pages_per_point: "the API's own default",
         },
         tools: {
-          geolink_geocode: "address or name → one place with viewport bounds",
+          geolink_geocode: "address or name → one place. Its `bounds` are the point plus a fixed 0.001° — not a viewport, and never an area to sweep",
           geolink_reverse_geocode: "lat,lng → address with district and governorate",
           geolink_search_places: "text query around one center → places with rating, phone, hours and category; limit=0 reads until the source runs dry",
           geolink_get_directions: "A → B routes; geometry opt-in (summary | polyline | waypoints)",
@@ -69,7 +69,7 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
           get_directions: "1, +1 per endpoint passed as a name",
           distance_matrix: "1 regardless of grid size, +1 per location passed as a name",
           find_nearest: "1 request in search mode; 1 matrix plus geocodes when you pass a list of candidates",
-          sweep_area: "1 request per call; dry_run reports how many calls the whole area needs. +1 geocode when the area is given as {place}",
+          sweep_area: "1 request per call; dry_run reports how many calls the whole area needs",
           caching: "geocodes are cached in-process for 10 minutes. Whole search and sweep answers are cached too, so paging with offset costs nothing - it is served from the answer already in hand",
           cheapest_win: "pass coordinates instead of names wherever you already have them",
         },
@@ -124,7 +124,7 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
     {
       title: "Egypt governorates",
       description:
-        "The 27 governorates of Egypt in English and Arabic. Use a name as area={place: ...} in geolink_sweep_area, or match against address_parts.governorate values.",
+        "The 27 governorates of Egypt in English and Arabic. Use a name as area={center: ..., radius_km: N} in geolink_sweep_area — the radius is yours to choose, there is no boundary geometry here — or match against address_parts.governorate values.",
       mimeType: "application/json",
     },
     async (uri) =>

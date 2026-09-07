@@ -1,6 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { GeoLinkError } from "../services/client.js";
 import { fitToLimit, guarded, ok, paginate, placesToGeoJson } from "../services/format.js";
 import { formatLatLng } from "../services/geo.js";
 import { normalizeXPlaces } from "../services/normalize.js";
@@ -57,27 +56,34 @@ const PlaceField = z.enum([
 ]);
 type PlaceFieldT = z.infer<typeof PlaceField>;
 
+/**
+ * Ground is a point and a radius, or a box. It is never just a name.
+ *
+ * There used to be a third form, `{place: "Giza"}`, which geocoded the name and
+ * swept its viewport. GeoLink has no boundary geometry, and the `bounds` a
+ * geocode returns are not a viewport - they are the point plus a fixed 0.001
+ * degrees in each direction. Measured: Giza, Cairo and Nasr City all come back
+ * as the same 190 x 220 metre rectangle.
+ *
+ * So `{place: "Giza"}` swept a box the size of a city block while claiming to
+ * sweep a governorate - the exact failure this tool exists to prevent, in the
+ * invocation the documentation led with. It is gone rather than papered over,
+ * because there is no radius this code could pick for an arbitrary name that
+ * would not be a guess dressed as a boundary. A caller who names a place has to
+ * say how far around it, and then the answer means something.
+ */
 const AreaSchema = z
   .union([
     z
       .object({
-        place: z
-          .string()
-          .min(1)
-          .max(300)
-          .describe('A named area to cover: a governorate, city, or district — "Giza", "الإسكندرية", "Nasr City". Its geocoded viewport becomes the sweep bounds.'),
-      })
-      .strict(),
-    z
-      .object({
         center: LocationInputSchema,
-        radius_km: z.number().min(0.5).max(100).describe("Radius around the center in km (0.5-100)."),
+        radius_km: z.number().min(0.5).max(100).describe("How far around the centre to cover, in km (0.5-100)."),
       })
       .strict(),
     z.object({ bounds: BoundsSchema }).strict(),
   ])
   .describe(
-    'The ground to cover. One of: {place: "Giza"}, {center: "Tahrir Square" | {lat,lng}, radius_km: 5}, or {bounds: {northeast, southwest}}.',
+    'The ground to cover: {center: "الجيزة" | {lat,lng}, radius_km: 20} or {bounds: {northeast, southwest}}. A name alone is not an area — GeoLink has no boundary geometry, so you say how far around the place to look.',
   );
 
 export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
@@ -136,7 +142,7 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
     dry_run: z.boolean(),
     view: z.enum(["places", "summary"]),
     area: z.object({
-      source: z.enum(["place", "center_radius", "bounds"]),
+      source: z.enum(["center_radius", "bounds"]),
       label: z.string(),
       center: LatLngSchema.optional(),
       radius_km: z.number().optional(),
@@ -190,7 +196,7 @@ Two different kinds of "there is more", and they are not interchangeable:
 
 Args:
   - query (string): what to find.
-  - area: {place} | {center, radius_km} | {bounds}.
+  - area: {center, radius_km} | {bounds}. A name alone is not an area.
   - view ('places' | 'summary', default 'places'): 'summary' answers "how many" and "which districts" for a fraction of the tokens.
   - dry_run (bool, default false): the request count and rough duration, without searching.
   - spacing_km (2-50), pages_per_point (1-15): both optional, both better left alone.
@@ -203,10 +209,11 @@ Args:
 Each place carries name, address, address_parts, location, category, type, timezone, and — when the place has one — rating (with its count), phone, website, photo and hours. An absent field means the place has no such thing, not that it could not be read.
 
 Examples:
-  - "All pharmacies in Giza" → query="pharmacy", area={place:"Giza"}
-  - "How many pharmacies in Giza, and where are they concentrated?" → the same, view="summary"
+  - "All pharmacies in Giza" → query="pharmacy", area={center:"الجيزة", radius_km:20}, view="summary" first
   - "Every ATM within 5 km of Smart Village" → query="ATM", area={center:"Smart Village", radius_km:5}
-  - "Cafés in this box, on a map" → area={bounds:{...}}, response_format="geojson"`,
+  - "Cafés in this box, on a map" → area={bounds:{...}}, response_format="geojson"
+
+A name on its own is not an area. GeoLink has no boundary geometry, so covering "Giza" means choosing how far around Giza to look — 20 km reaches most of the governorate's populated ground, 5 km covers a district. Say the radius rather than letting something guess it for you.`,
       inputSchema: SweepShape,
       outputSchema: SweepOutput,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -221,7 +228,7 @@ Examples:
       // parameters. A name goes over as a name: the API resolves it and tells
       // us what it picked, which is both one round trip fewer and one more
       // fact than geocoding it here would have given us.
-      let source: "place" | "center_radius" | "bounds";
+      let source: "center_radius" | "bounds";
       let label: string;
       let center: LatLng | undefined;
       let radiusKm: number | undefined;
@@ -229,22 +236,7 @@ Examples:
       let near: string | undefined;
       let boundsParam: string | undefined;
 
-      if ("place" in args.area) {
-        // A governorate is an area, not a point, and its viewport is the only
-        // thing that says how far it reaches. `near` would collapse it to its
-        // centre and sweep a circle that is both too small and the wrong shape.
-        source = "place";
-        const geo = await ctx.client.geocode(args.area.place, lang, country);
-        if (!geo.bounds) {
-          throw new GeoLinkError(
-            `"${args.area.place}" geocoded without viewport bounds, so it does not describe an area`,
-            "bad_request",
-            `Use area={center: "${args.area.place}", radius_km: N} instead.`,
-          );
-        }
-        bounds = geo.bounds;
-        label = geo.name || args.area.place;
-      } else if ("center" in args.area) {
+      if ("center" in args.area) {
         source = "center_radius";
         radiusKm = args.area.radius_km;
         if (typeof args.area.center === "string") {

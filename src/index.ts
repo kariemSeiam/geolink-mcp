@@ -94,7 +94,7 @@ Pick tools by task:
 
 Names collide, so anywhere you pass one, read \`resolved_to\` back. An answer about the wrong Nasr City looks exactly like an answer about the right one.
 
-Every place carries address_parts {district, governorate, country} — group and filter on those rather than parsing address strings — plus category, type, timezone, and, when the place has one, a rating with the count it rests on, a phone, a website and today's hours. An absent field means the place genuinely has no such thing; nothing is padded with a zero to hide a gap.
+Every place from every tool carries address_parts {district, governorate, country} — group and filter on those rather than parsing address strings. Places from geolink_search_places, geolink_sweep_area and geolink_find_nearest carry more: category, type, timezone, and, when the place has one, a rating with the count it rests on, a phone, a website and today's hours. An absent field there means the place genuinely has no such thing; nothing is padded with a zero to hide a gap. geolink_geocode and geolink_reverse_geocode answer a narrower question and return the name, address, address_parts and location only.
 
 Depth is not coverage: a large limit reads one centre harder, a sweep reads new ground. A search from one point never finds what is in the next district, however large the limit.
 

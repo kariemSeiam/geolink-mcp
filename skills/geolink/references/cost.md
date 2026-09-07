@@ -13,7 +13,7 @@ with `node scripts/probe.mjs` rather than trusting the page — the upstream mov
 | `geolink_get_directions` | 1, +1 per endpoint given as a name |
 | `geolink_distance_matrix` | **1, whatever the grid size**, +1 per named location |
 | `geolink_find_nearest` | **1** in search mode; 1 matrix + geocodes when you pass a list |
-| `geolink_sweep_area` | **1 per call**; `dry_run` says how many calls the whole area needs. +1 geocode when the area is `{place}` |
+| `geolink_sweep_area` | **1 per call**; `dry_run` says how many calls the whole area needs |
 
 Three of those became 1 when the paging, the grid and the road-ranking moved
 server-side. What used to cost this client sixteen requests for a deep search is

@@ -21,7 +21,8 @@ export function registerPrompts(server: McpServer): void {
             text: `Produce a coverage report for "${category}" across "${area}" using the GeoLink tools.
 
 Steps:
-1. geolink_sweep_area with query="${category}", the area (use {place: "${area}"} unless it describes a radius, in which case {center, radius_km}), and view="summary". This costs one call and answers "how many" and "which districts" without listing anything.
+1. geolink_sweep_area with query="${category}", area={center: "${area}", radius_km: N}, and view="summary". This costs one call and answers "how many" and "which districts" without listing anything.
+   Pick N yourself and say so: GeoLink has no boundary geometry, so "${area}" is a point plus a radius you chose. 20 km reaches most of a governorate's populated ground, 5 km covers a district. If "${area}" already names a radius, use that.
 2. Read the completeness fields before you quote the number:
    - results_complete: false means the count is a floor. Raise pages_per_point (up to 15) and ask again before reporting anything.
    - area_fully_swept: false means ground was never visited. Pass continue_from back and merge what comes.
@@ -84,7 +85,7 @@ Use geolink_find_nearest with origin=the customer and candidates=the branch list
             text: `Count "${category}" across "${area}", then establish whether that count is a total or a floor. Do not report the number until you know which.
 
 1. Read geolink://playbook/coverage first.
-2. geolink_sweep_area, area={place:"${area}"}, view="summary".
+2. geolink_sweep_area, area={center:"${area}", radius_km: N}, view="summary". State the N — it is your choice, not the area's, and the claim you end up making is "within N km of ${area}".
 3. Two things can be short, they fail independently, and they are fixed by different parameters:
    - results_complete: false — the vantage points were read too shallow. The source had more at the points that were visited. Re-run with pages_per_point=15.
    - area_fully_swept: false — the sweep ran out of time with ground unvisited. Re-run passing continue_from, and add what comes back.
@@ -120,7 +121,7 @@ A number without one of those two labels is not an answer to this question.`,
             type: "text",
             text: `Find where a new "${service}" would serve people who are currently far from one, across "${area}".
 
-1. geolink_sweep_area for "${service}" over {place:"${area}"} with view="summary".
+1. geolink_sweep_area for "${service}" over {center:"${area}", radius_km: N} with view="summary".
 2. geolink_sweep_area for "${demand_proxy}" over the same area, with the same parameters, so the two counts are comparable. Two sweeps with different depth or different ground are not a ratio, they are two unrelated numbers.
 3. Check results_complete and area_fully_swept on both. If one is a floor and the other is not, the ratio between them is meaningless — fix that before comparing.
 4. Compare by_district between them. Rank districts by demand count divided by supply count; a district with demand and no supply ranks highest.

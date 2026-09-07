@@ -69,17 +69,21 @@ and applying the wrong remedy leaves the other one silently in place.
 
 ## 4. The edges — the one test nothing inside a sweep can run
 
-A named area gets its bounds from the geocoder's viewport, which is often tighter
-than the administrative boundary. Nothing inside a sweep can see what its own
-bounds left out.
+Ground is a centre and a radius, or a box you chose. There is no third option:
+GeoLink holds no boundary geometry, and the `bounds` a geocode returns are the
+point plus a fixed 0.001 degrees — the same 190 x 220 m box for Giza as for a
+single district (tripwire 7). So "all of Giza" is always a radius somebody
+picked, and the only question is whether it was picked well.
 
-**The test:** reverse-geocode the four corners and the centre of the area. If a
-corner comes back with a district that never appears in the `by_district`
-breakdown, the sweep stopped short of ground that belongs to the area.
+**The test:** reverse-geocode the four corners and the centre of the ground you
+covered. If a corner comes back with a district that never appears in the
+`by_district` breakdown, the radius stopped short of ground that belongs to the
+question.
 
-**The fix:** sweep that district by name as its own area, and add the result.
-There is no padding parameter any more — the area you name is the area you get,
-which is one fewer knob and one fewer thing to get subtly wrong.
+**The fix:** raise `radius_km`, or sweep the missing district as its own centre
+and add the result. State the radius in the answer — "all pharmacies within
+20 km of Giza" is a claim someone can check; "all pharmacies in Giza" is not,
+because nothing here knows where Giza ends.
 
 ## Reading the answer like an inspector
 

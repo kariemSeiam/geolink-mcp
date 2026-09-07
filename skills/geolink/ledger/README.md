@@ -15,7 +15,7 @@ would have done.
 ## 2026-09-03 · pharmacies in Nasr City
 
 claim:        at least 412
-area:         {place: "Nasr City"}
+area:         {center: "Nasr City", radius_km: 6}
 spacing:      2 km, 61 grid points
 depth:        40 per point (2 requests each)
 cost:         122 calls, 41 s

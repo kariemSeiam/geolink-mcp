@@ -93,33 +93,16 @@ const text = (res: any): string => res.content?.map((c: any) => c.text).join("\n
 /* Saying where                                                        */
 /* ------------------------------------------------------------------ */
 
-test("a named area is swept as a viewport, not as a point", async () => {
-  // A governorate is ground, not a location. Sending it as `near` would
-  // collapse Giza to its centre and sweep a circle that is the wrong shape and
-  // mostly the wrong place.
-  const sent = stubUpstream((url) =>
-    url.pathname.includes("geocode")
-      ? {
-          body: {
-            success: true,
-            data: {
-              short_address: "الجيزة",
-              address: "محافظة الجيزة",
-              address_parts: { district: "", governorate: "الجيزة", country: "eg" },
-              location: { lat: 30.0, lng: 31.2 },
-              bounds: { northeast: { lat: 30.2, lng: 31.4 }, southwest: { lat: 29.8, lng: 31.0 } },
-            },
-          },
-        }
-      : { body: { success: true, data: places(3), total: 3 } },
-  );
+test("a name on its own is not an area", async () => {
+  // {place: "Giza"} used to geocode the name and sweep its "viewport". The
+  // bounds a geocode returns are the point plus a fixed 0.001 degrees - Giza,
+  // Cairo and Nasr City all come back as the same 190 x 220 metre box - so that
+  // mode swept a city block while claiming to sweep a governorate. It is gone,
+  // and the schema refuses it rather than quietly picking a radius.
+  stubUpstream(() => ({ body: { success: true, data: places(1), total: 1 } }));
   const { client } = await harness();
-  await call(client, { query: "صيدلية", area: { place: "الجيزة" } });
-
-  const sweep = sent.find((s) => s.url.pathname.includes("/api/x/sweep"))!;
-  assert.equal(sweep.url.searchParams.get("bounds"), "29.800000,31.000000,30.200000,31.400000");
-  assert.equal(sweep.url.searchParams.get("near"), null);
-  assert.equal(sweep.url.searchParams.get("radius_km"), null);
+  const res = await call(client, { query: "صيدلية", area: { place: "الجيزة" } });
+  assert.equal(res.isError, true);
 });
 
 test("a named centre goes over as a name, not as coordinates we guessed", async () => {

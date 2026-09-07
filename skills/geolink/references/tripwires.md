@@ -153,25 +153,37 @@ explicitly declined, and any total still short is reported as "at least N".
 
 ---
 
-## 7. The viewport is not the boundary
+## 7. There is no boundary, and the field named like one is a constant
 
-**What happened.** A named area's bounds come from the geocoder's viewport, which
-is a display rectangle, not an administrative border. It is frequently tighter
-than the real area — a district's viewport can exclude the streets along its own
-edge — and occasionally far looser, when a small place falls back to its parent
-city's box.
+**What happened.** A sweep took a named area and covered "its geocoded
+viewport". A geocode returns a `bounds` object, so this looked well-founded for
+as long as nobody measured it. `bounds` is the point plus a fixed 0.001 degrees
+in each direction: **Giza, Cairo and Nasr City all come back as the same
+190 x 220 metre rectangle.** It is not a viewport, it is decoration with a
+plausible name.
 
-**Why here.** The source returns what a map would show, not what a boundary file
-would define. There is no boundary geometry in this API at all.
+So `area: {place: "Giza"}` swept a box the size of a city block and reported it
+as a governorate — the exact failure the whole method exists to prevent, in the
+invocation the documentation led with. It survived because a 220 m box still
+returns a lot of pharmacies: the search's own reach carries far beyond the
+bounds, so the answer looked healthy and was about ground nobody had specified.
 
-**The check.** Reverse-geocode the four corners and the centre of the bounds. A
-corner returning a district absent from your results is ground the sweep stopped
-short of; one returning a *different city* means the viewport is far too loose
-and the area needs `{center, radius_km}` instead.
+**Why here.** The field is not lying, it is answering a smaller question than
+its name implies, and the earlier version of this tripwire repeated the
+misreading — "often tighter than the administrative boundary" is what you write
+when you assume the number is a real viewport that happens to be conservative.
+A field that is the same for a governorate and a district is not conservative.
+It is not a measurement at all.
 
-**Passes when:** the corners have been probed, and any district found there but
-missing from the results has been swept by name as its own area and added. There
-is no padding parameter — the area you name is the area you get.
+**The check.** Geocode two places of wildly different size and compare the
+extent of their bounds. If the boxes are the same, `bounds` is a constant, and
+anything that treats it as an area is measuring nothing. More generally: before
+building on a field, confirm it varies with the thing it claims to describe.
+
+**Passes when:** no area is derived from a geocode. Ground is given as
+`{center, radius_km}` or `{bounds}` you chose — GeoLink holds no boundary
+geometry, so "all of Giza" is always a radius someone picked, and the radius is
+stated in the answer rather than implied by a place name.
 
 ---
 
