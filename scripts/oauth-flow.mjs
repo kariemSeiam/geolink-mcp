@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-const BASE = "http://127.0.0.1:3131";
+const BASE = process.env.MCP_BASE ?? "http://127.0.0.1:3131";
 let failures = 0;
 const ok = (n, p, d) => { if (!p) failures++; console.log(`${p ? "PASS" : "FAIL"}  ${n}${d ? "  — " + d : ""}`); };
 process.on("beforeExit", () => {
@@ -13,7 +13,13 @@ let r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "Content-Type": 
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
 const chal = r.headers.get("www-authenticate") ?? "";
 ok("unauthenticated POST /mcp -> 401", r.status === 401, `status=${r.status}`);
-ok("challenge names the metadata document", /resource_metadata="http:\/\/127\.0\.0\.1:3131\/\.well-known\/oauth-protected-resource\/mcp"/.test(chal), chal.slice(0, 90));
+// Derived from BASE, never spelled out: a hardcoded origin here passes against
+// the local mock and says nothing about the deployed server, which is the only
+// place this header's value can actually be wrong. Same lesson as the consent
+// form's action attribute, one header along.
+ok("challenge names the metadata document",
+   chal.includes(`resource_metadata="${BASE}/.well-known/oauth-protected-resource/mcp"`),
+   chal.slice(0, 90));
 ok("challenge quotes its values", !/resource_metadata=[^"]/.test(chal));
 
 // 2. Discovery documents, unauthenticated.
@@ -74,7 +80,7 @@ ok("unregistered redirect_uri is refused", r.status === 400, `status=${r.status}
 
 // 7. Consent POST -> code, carrying iss.
 const form = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9911/cb",
-  response_type: "code", code_challenge: challenge, code_challenge_method: "S256", state: "st-123", api_key: "test-key" });
+  response_type: "code", code_challenge: challenge, code_challenge_method: "S256", state: "st-123", api_key: process.env.MCP_KEY ?? "test-key" });
 r = await fetch(`${BASE}/mcp/authorize`, { method: "POST", redirect: "manual",
   headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form });
 const loc = new URL(r.headers.get("location") ?? "http://x/");
@@ -98,7 +104,7 @@ ok("replayed code is refused", r.status === 400, `status=${r.status}`);
 
 // 10. A wrong verifier must fail.
 const f2 = new URLSearchParams({ client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9911/cb", response_type: "code",
-  code_challenge: challenge, code_challenge_method: "S256", api_key: "test-key" });
+  code_challenge: challenge, code_challenge_method: "S256", api_key: process.env.MCP_KEY ?? "test-key" });
 r = await fetch(`${BASE}/mcp/authorize`, { method: "POST", redirect: "manual", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: f2 });
 const code2 = new URL(r.headers.get("location")).searchParams.get("code");
 r = await fetch(`${BASE}/mcp/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
