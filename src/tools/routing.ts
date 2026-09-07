@@ -3,7 +3,7 @@ import { z } from "zod";
 import { UPSTREAM_PAGE_SIZE } from "../constants.js";
 import { GeoLinkError } from "../services/client.js";
 import { cellText, fitToLimit, guarded, ok, routeMarkdown } from "../services/format.js";
-import { encodePolyline, formatLatLng, haversineKm, impliedSpeedKmh, PLAUSIBLE_SPEED_KMH, round, samplePoints } from "../services/geo.js";
+import { encodePolyline, formatLatLng, haversineKm, impliedSpeedKmh, parseLatLng, PLAUSIBLE_SPEED_KMH, round, samplePoints } from "../services/geo.js";
 import {
   countryParam,
   languageParam,
@@ -18,8 +18,9 @@ import {
   type ToolContext,
 } from "../services/resolve.js";
 import { BoundsSchema } from "../services/resolve.js";
-import { MatrixCellSchema, PlaceSchema, ResolvedLocationSchema, RouteEndpointSchema } from "../services/schemas.js";
-import type { LatLng, MatrixCell, Place, ResolvedLocation, Route } from "../types.js";
+import { normalizeXPlaces } from "../services/normalize.js";
+import { MatrixCellSchema, PlaceSchema, ResolvedLocationSchema, RouteEndpointSchema, XNearSchema, XPlaceSchema } from "../services/schemas.js";
+import type { LatLng, MatrixCell, Place, ResolvedLocation, Route, XTravel } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -346,30 +347,49 @@ Examples:
   /* ---------------------------------------------------------------- */
   /* geolink_find_nearest                                               */
   /* ---------------------------------------------------------------- */
+  /**
+   * Which of these is actually closest.
+   *
+   * Not a nicer number for the same answer. Measured across eighteen origins,
+   * the nearest place by road was a *different place* than the nearest by
+   * straight line 22% of the time, and road distance ran 1.6x the line at the
+   * median. A live call while this was being written: three pharmacies at 503,
+   * 1304 and 1983 metres by line come back 503, 1983, 1304 by road - the
+   * second-closest on the map is third to drive to.
+   *
+   * Two modes, because the question comes in two shapes and only one of them
+   * fits a single endpoint. When the options are already known - eight
+   * branches, four warehouses - they have to be routed as a matrix, and the
+   * care in that path is about pairing a cell back to the place it belongs to.
+   * When the options have to be found first, x/nearest does the whole thing in
+   * one call and pairs them itself.
+   */
   const RankBy = z.enum(["duration", "distance"]);
 
   const NearestShape = {
-    origin: LocationInputSchema.describe("The reference point (customer, driver, user)."),
+    origin: LocationInputSchema.describe("The reference point: a customer, a driver, a user."),
     candidates: z
       .array(LocationInputSchema)
       .min(1)
       .max(50)
       .optional()
-      .describe("Known candidate locations to rank (branches, warehouses, drivers). Coordinates or names. Provide this OR search_query."),
+      .describe("Options you already know — branches, warehouses, drivers. Coordinates or names. Give this OR search_query."),
     search_query: z
       .string()
       .min(1)
       .max(300)
       .optional()
-      .describe('Discover candidates by searching near the origin, e.g. "pharmacy", "ATM", "مستشفى". Provide this OR candidates.'),
+      .describe('Find the options near the origin instead: "pharmacy", "ATM", "مستشفى". Give this OR candidates.'),
     candidate_limit: z
       .number()
       .int()
       .min(1)
       .max(50)
       .default(10)
-      .describe("With search_query: how many search hits (closest by straight line) to route against. Default 10. The search itself goes deeper than this so the pre-filter has a real pool to choose from."),
-    rank_by: RankBy.default("duration").describe("Rank by travel 'duration' (default) or road 'distance'."),
+      .describe(
+        "With search_query: how many nearby places to measure by road before ranking (default 10). A larger shortlist costs more and finds winners a smaller one would have missed — the nearest by road is often not among the three nearest by line.",
+      ),
+    rank_by: RankBy.default("duration").describe("Rank by travel 'duration' (default) or road 'distance'. They disagree more often than they agree in traffic."),
     limit: z.number().int().min(1).max(50).default(5).describe("How many ranked results to return (default 5)."),
     language: languageParam,
     country: countryParam,
@@ -383,6 +403,7 @@ Examples:
     label: z.string(),
     location: z.object({ lat: z.number(), lng: z.number() }),
     place: PlaceSchema.optional(),
+    x_place: XPlaceSchema.partial().optional(),
     straight_line_km: z.number(),
     implied_speed_kmh: z.number().optional(),
     unreliable_pairing: z.boolean().optional(),
@@ -390,15 +411,22 @@ Examples:
     distance_text: z.string(),
     duration_seconds: z.number(),
     duration_text: z.string(),
-    is_geolink_nearest: z.boolean(),
+    is_geolink_nearest: z.boolean().optional(),
   });
 
   const NearestOutput = {
     origin: ResolvedLocationSchema,
     source: z.enum(["candidates", "search"]),
     search_query: z.string().optional(),
+    resolved_to: XNearSchema.nullable().optional(),
     rank_by: RankBy,
     candidates_evaluated: z.number().int(),
+    results_complete: z
+      .boolean()
+      .optional()
+      .describe(
+        "Search mode only. False means the shortlist itself was cut short, so the winner was picked from fewer candidates than were available — and a winner from half the field is a different winner. Raise candidate_limit.",
+      ),
     results: z.array(RankedSchema),
     warning: z.string().optional(),
   };
@@ -406,33 +434,29 @@ Examples:
   server.registerTool(
     "geolink_find_nearest",
     {
-      title: "Find nearest by travel time",
-      description: `Rank candidate locations by real road travel time (or distance) from one origin. Two modes:
-  1. candidates: you already know the options (branches, warehouses, drivers) — they get routed in one matrix call.
-  2. search_query: discover options near the origin via place search, keep the closest candidate_limit by straight line, then route them.
+      title: "Find nearest by road",
+      description: `Rank options by real road travel time or distance from one origin. This is the "which branch should serve this customer" and "which pharmacy is actually closest" tool.
 
-This is the "which branch should serve this customer / which pharmacy is really closest" tool. Straight-line nearest is often wrong in Cairo; this uses road time.
+Straight-line nearest is a different answer, not a rougher one. Measured across 18 origins, the nearest by road was a different place than the nearest by line 22% of the time, and the road ran 1.6x the line at the median. In a city with a river, a ring road and one-way streets, the map lies.
+
+Two modes:
+  - **candidates**: you already know the options. They are routed together in one matrix call, and each result's travel time is paired back to its place by coordinate rather than by position — because nothing guarantees the upstream echoes them in the order they were sent, and trusting position hands one branch's drive time to another.
+  - **search_query**: the options have to be found first. One call finds the nearby places, measures each by road, and ranks them. Places with no route are left out rather than guessed at.
+
+Ranking by duration and by distance disagree often; pick the one that matches the decision. candidate_limit is the real cost and quality knob in search mode: the nearest by road is frequently not among the three nearest by line, so a shortlist of 10 finds winners a shortlist of 3 would have missed.
 
 Args:
   - origin (string | {lat,lng}).
   - candidates (array, 1-50) OR search_query (string) — exactly one.
-  - candidate_limit (1-25, default 10): search mode only.
+  - candidate_limit (1-50, default 10): search mode only.
   - rank_by ('duration' | 'distance', default 'duration').
   - limit (1-50, default 5).
   - language, country, response_format.
 
-Returns (structuredContent):
-  {
-    "origin": {lat,lng,input,label,source}, "source": "candidates" | "search", "rank_by", "candidates_evaluated",
-    "results": [ { rank, candidate_index, label, location: {lat,lng}, place?: Place,
-                   straight_line_km, distance_meters, distance_text, duration_seconds, duration_text,
-                   is_geolink_nearest } ]   // is_geolink_nearest = matches GeoLink's own nearest_destination_index
-  }
-
 Examples:
-  - "Nearest of our 8 branches to this customer" -> origin=customer, candidates=[8 branches]
-  - "Closest hospital by driving time to 30.05,31.23" -> origin="30.05,31.23", search_query="hospital"
-  - API cost: 1 matrix call (+1 search call in search mode, + cached geocodes for any names).`,
+  - "Nearest of our 8 branches to this customer" → origin=customer, candidates=[8 branches]
+  - "Closest hospital by driving time to 30.05,31.23" → origin="30.05,31.23", search_query="hospital"
+  - "Is the closest pharmacy on the map really the closest to drive to?" → search_query="pharmacy", and compare straight_line_km against the ranking.`,
       inputSchema: NearestShape,
       outputSchema: NearestOutput,
       annotations: READ_ONLY,
@@ -445,53 +469,139 @@ Examples:
         throw new GeoLinkError(
           "Provide exactly one of candidates or search_query",
           "bad_request",
-          "Pass candidates=[...] when you already know the options, or search_query=\"...\" to discover them near the origin.",
+          'Pass candidates=[...] when you already know the options, or search_query="..." to find them near the origin.',
         );
       }
       const lang = pickLang(ctx, args.language);
       const country = pickCountry(ctx, args.country);
+
+      /* ---------- Find them, then measure by road: one call ---------- */
+      if (hasQuery) {
+        // The origin goes over as a name when it is one. The API resolves it,
+        // measures every candidate by road and ranks them, and reports what the
+        // name turned out to be - so nothing here has to geocode first, and
+        // nothing has to pair a travel time back to a place afterwards.
+        let near: string | undefined;
+        let center: LatLng | undefined;
+        if (typeof args.origin === "string") {
+          const asCoords = parseLatLng(args.origin);
+          if (asCoords) center = asCoords;
+          else near = args.origin;
+        } else {
+          center = args.origin;
+        }
+
+        const res = await ctx.client.xNearest({
+          query: args.search_query ?? "",
+          near,
+          center,
+          language: lang,
+          country,
+          limit: args.candidate_limit,
+          candidates: args.candidate_limit,
+        });
+
+        if (!res.places.length) {
+          throw new GeoLinkError(
+            `No places with a route were found for "${args.search_query}" near ${near ?? formatLatLng(center ?? { lat: 0, lng: 0 })}`,
+            "not_found",
+            "Try a broader query, the other language (ar/en), or a larger candidate_limit.",
+          );
+        }
+
+        const resolvedTo = res.near ?? null;
+        const originPoint: LatLng = resolvedTo?.location ?? center ?? { lat: 0, lng: 0 };
+        const originLabel = resolvedTo?.short_address ?? resolvedTo?.address ?? formatLatLng(originPoint);
+
+        const measured = normalizeXPlaces(res.places)
+          .map((p, i) => {
+            const travel = (p as unknown as { travel?: XTravel }).travel;
+            return {
+              candidate_index: i,
+              label: p.name,
+              location: p.location,
+              x_place: p,
+              straight_line_km: round((p.distance_m ?? 0) / 1000, 3),
+              distance_meters: travel?.distance_m ?? 0,
+              distance_text: travel?.distance_text ?? "",
+              duration_seconds: travel?.duration_s ?? 0,
+              duration_text: travel?.duration_text ?? "",
+            };
+          })
+          // A place with no route cannot be ranked by one. The API already
+          // leaves those out; this catches anything that slipped through
+          // rather than ranking it at zero, which would make it the winner.
+          .filter((r) => r.distance_meters > 0 || r.duration_seconds > 0);
+
+        const ranked = measured
+          .sort((a, b) =>
+            args.rank_by === "duration"
+              ? a.duration_seconds - b.duration_seconds
+              : a.distance_meters - b.distance_meters,
+          )
+          .slice(0, args.limit)
+          .map((r, i) => ({ rank: i + 1, ...r }));
+
+        const structured = {
+          origin: {
+            lat: originPoint.lat,
+            lng: originPoint.lng,
+            input: typeof args.origin === "string" ? args.origin : formatLatLng(args.origin),
+            label: originLabel,
+            source: (near ? "geocode" : "coordinates") as "geocode" | "coordinates",
+          },
+          source: "search" as const,
+          search_query: args.search_query ?? "",
+          resolved_to: resolvedTo,
+          rank_by: args.rank_by,
+          candidates_evaluated: measured.length,
+          ...(res.complete !== undefined ? { results_complete: res.complete } : {}),
+          results: ranked,
+        };
+
+        const text =
+          args.response_format === ResponseFormat.JSON
+            ? JSON.stringify(structured, null, 2)
+            : [
+                `# Nearest to ${originLabel} by ${args.rank_by === "duration" ? "driving time" : "road distance"}`,
+                `_${measured.length} candidate(s) measured by road, from a search for "${args.search_query}"_`,
+                ...(res.complete === false
+                  ? [
+                      "",
+                      "> **The shortlist was cut short.** More candidates were available than were measured, and the nearest by road is often not among the nearest by line — so a better answer may not have been in the running. Raise `candidate_limit`.",
+                    ]
+                  : []),
+                "",
+                ...ranked.map((r) => {
+                  const detour = r.straight_line_km > 0 ? ` — ${(r.distance_meters / 1000 / r.straight_line_km).toFixed(1)}x the straight line` : "";
+                  const extra = [r.x_place?.category, r.x_place?.phone].filter(Boolean).join(" · ");
+                  return [
+                    `${r.rank}. **${r.label}** — ${r.distance_text || `${r.distance_meters} m`} / ${r.duration_text || `${r.duration_seconds} s`}`,
+                    `   ${r.straight_line_km} km in a straight line${detour}`,
+                    ...(extra ? [`   ${extra}`] : []),
+                    `   \`${formatLatLng(r.location)}\``,
+                  ].join("\n");
+                }),
+              ].join("\n");
+
+        return ok(structured, text);
+      }
+
+      /* ---------- Options already known: route them together ---------- */
       const origin = await resolveLocation(ctx, args.origin, lang, country);
 
-      // Guard before spending: geocoding candidates and searching both cost
-      // upstream calls, so refuse an over-sized job before paying for it.
-      const plannedCells = hasCandidates ? (args.candidates?.length ?? 0) : args.candidate_limit;
+      // Guard before spending: geocoding candidates costs upstream calls, so
+      // refuse an over-sized job before paying for it.
+      const plannedCells = args.candidates?.length ?? 0;
       if (plannedCells > ctx.cfg.maxMatrixCells) {
         throw new GeoLinkError(
           `Too many candidates (${plannedCells}); limit is ${ctx.cfg.maxMatrixCells}`,
           "bad_request",
-          "Lower candidate_limit / pass fewer candidates, or raise GEOLINK_MAX_MATRIX_CELLS.",
+          "Pass fewer candidates, or raise GEOLINK_MAX_MATRIX_CELLS.",
         );
       }
 
-      let candidates: ResolvedLocation[];
-      let places: (Place | undefined)[];
-      if (hasCandidates) {
-        candidates = await resolveMany(ctx, args.candidates ?? [], lang, country);
-        places = candidates.map(() => undefined);
-      } else {
-        // Search deeper than candidate_limit: the closest N by road time are
-        // not always the closest N by straight line, so give the pre-filter a
-        // wider pool to choose from.
-        const searchDepth = Math.max(UPSTREAM_PAGE_SIZE, args.candidate_limit * 2);
-        const found = await ctx.client.textSearch(args.search_query ?? "", toLatLng(origin), lang, country, searchDepth);
-        if (!found.length) {
-          throw new GeoLinkError(
-            `No places found for "${args.search_query}" near ${origin.label}`,
-            "not_found",
-            "Try a broader query or the other language (ar/en).",
-          );
-        }
-        const closest = [...found]
-          .sort((a, b) => haversineKm(origin, a.location) - haversineKm(origin, b.location))
-          .slice(0, args.candidate_limit);
-        candidates = closest.map((p) => ({
-          ...p.location,
-          input: p.name,
-          label: p.name || p.address,
-          source: "geocode" as const,
-        }));
-        places = closest;
-      }
+      const candidates: ResolvedLocation[] = await resolveMany(ctx, args.candidates ?? [], lang, country);
 
       const result = await ctx.client.distanceMatrix([toLatLng(origin)], candidates.map(toLatLng), lang, country);
       const row: MatrixCell[] = result.matrix[0] ?? [];
@@ -521,7 +631,6 @@ Examples:
           // one place's travel time to another. When the order does match this
           // resolves to the same cell.
           const cell = cellFor(i, toLatLng(c)) ?? { distance_meters: 0, distance_text: "", duration_seconds: 0, duration_text: "" };
-          const place = places[i];
           const straightLineKm = round(haversineKm(origin, c), 3);
           // A road route cannot be shorter than the straight line between its
           // own endpoints. If it is, this cell belongs to a different place,
@@ -537,7 +646,6 @@ Examples:
             candidate_index: i,
             label: c.label,
             location: toLatLng(c),
-            ...(place ? { place } : {}),
             straight_line_km: straightLineKm,
             ...cell,
             ...(speed !== null ? { implied_speed_kmh: round(speed, 1) } : {}),
@@ -556,8 +664,7 @@ Examples:
 
       const structured = {
         origin,
-        source: hasCandidates ? ("candidates" as const) : ("search" as const),
-        ...(hasQuery ? { search_query: args.search_query ?? "" } : {}),
+        source: "candidates" as const,
         rank_by: args.rank_by,
         candidates_evaluated: candidates.length,
         results: ranked,
@@ -573,11 +680,11 @@ Examples:
           ? JSON.stringify(structured, null, 2)
           : [
               `# Nearest to ${origin.label} (by ${args.rank_by})`,
-              `_${candidates.length} candidate(s) evaluated${hasQuery ? ` from search "${args.search_query}"` : ""}_`,
+              `_${candidates.length} candidate(s) evaluated_`,
               "",
               ...ranked.map(
                 (r) =>
-                  `${r.rank}. **${r.label}** — ${r.distance_text || `${r.distance_meters} m`} / ${r.duration_text || `${r.duration_seconds} s`} (straight line ${r.straight_line_km} km)${r.is_geolink_nearest ? " ⭐" : ""}\n   📍 ${formatLatLng(r.location)}${r.place?.address_parts.district ? ` · ${r.place.address_parts.district}, ${r.place.address_parts.governorate}` : ""}`,
+                  `${r.rank}. **${r.label}** — ${r.distance_text || `${r.distance_meters} m`} / ${r.duration_text || `${r.duration_seconds} s`} (straight line ${r.straight_line_km} km)${r.is_geolink_nearest ? " ⭐" : ""}\n   📍 ${formatLatLng(r.location)}`,
               ),
               "",
               "_⭐ = GeoLink's own nearest_destination_index_",

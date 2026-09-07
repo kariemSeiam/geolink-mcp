@@ -76,6 +76,15 @@ export const XPlaceSchema = z.object({
     .nullable(),
   timezone: z.string().nullable(),
   distance_m: z.number().nullable(),
+  /** Road distance and duration. Present only on x/nearest results. */
+  travel: z
+    .object({
+      distance_m: z.number(),
+      distance_text: z.string(),
+      duration_s: z.number(),
+      duration_text: z.string(),
+    })
+    .optional(),
 });
 
 /** What a place named in words turned out to be. */

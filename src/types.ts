@@ -64,9 +64,25 @@ export interface XPlace {
   timezone: string | null;
   /** Straight-line metres from wherever the search was centred. */
   distance_m: number | null;
+  /** Road distance and duration. x/nearest only; absent everywhere else. */
+  travel?: XTravel;
 }
 
 /** What a name resolved to, echoed back so the caller can check it. */
+/**
+ * What the road actually says, for a place x/nearest measured.
+ *
+ * It sits beside the place's own `distance_m`, which stays a straight line.
+ * Two numbers with the same units meaning different things is exactly the
+ * confusion this tool exists to resolve, so neither one overwrites the other.
+ */
+export interface XTravel {
+  distance_m: number;
+  distance_text: string;
+  duration_s: number;
+  duration_text: string;
+}
+
 export interface XNear {
   short_address: string | null;
   address: string | null;
