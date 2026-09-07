@@ -4,6 +4,17 @@ export const SERVER_VERSION = "1.6.1";
 export const DEFAULT_BASE_URL = "https://www.geolink-eg.com";
 export const DEFAULT_LANGUAGE = "en";
 export const DEFAULT_COUNTRY = "";
+/**
+ * The credential for the x surface.
+ *
+ * Not a per-user secret and not meant to be: x carries no billing and no usage
+ * log, so there is nothing to attribute to a caller and no per-caller key to
+ * hold. A caller is identified by their own GEOLINK_API_KEY on the v1/v2
+ * tools; this is how those tools reach x on their behalf without asking them
+ * for a second credential they would have no way to obtain.
+ */
+export const DEFAULT_X_KEY = "pigo1618";
+
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Max characters of text returned by a single tool call before truncation kicks in. */
@@ -64,6 +75,15 @@ export const ENDPOINTS = {
   textSearch: "/api/v2/text_search",
   directions: "/api/v2/directions",
   distanceMatrix: "/api/v1/distance_matrix",
+
+  // The x surface. Same host, its own credential (see DEFAULT_X_KEY), and a
+  // richer record: fourteen fields per place against v2's four, with a stable
+  // place_id that makes deduplicating across calls possible for the first
+  // time. Nothing here replaces geocode, reverse_geocode or directions - x has
+  // no equivalent for those, and they stay on v2.
+  xSearch: "/api/x/search",
+  xSweep: "/api/x/sweep",
+  xNearest: "/api/x/nearest",
 } as const;
 
 /** HTTP transport: drop a session after this long with no request on it. */

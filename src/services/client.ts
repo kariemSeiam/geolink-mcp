@@ -17,6 +17,8 @@ import type {
   RawMatrix,
   RawPlace,
   Route,
+  XNear,
+  XPlace,
 } from "../types.js";
 import { normalizeMatrix, normalizePlace, normalizePlaces, normalizeRoutes } from "./normalize.js";
 
@@ -189,6 +191,7 @@ export class GeoLinkClient {
     params: Params,
     cacheKey?: string,
     seen?: { headers?: Headers },
+    keepEnvelope = false,
   ): Promise<T> {
     if (cacheKey) {
       const hit = this.cache.get(cacheKey);
@@ -205,7 +208,7 @@ export class GeoLinkClient {
         await new Promise((resolve) => setTimeout(resolve, backoff + Math.random() * backoff));
       }
       try {
-        return await this.attempt<T>(path, params, cacheKey, seen);
+        return await this.attempt<T>(path, params, cacheKey, seen, keepEnvelope);
       } catch (err) {
         if (!(err instanceof GeoLinkError) || !GeoLinkClient.RETRYABLE.has(err.kind)) throw err;
         lastError = err;
@@ -237,13 +240,22 @@ export class GeoLinkClient {
     params: Params,
     cacheKey?: string,
     seen?: { headers?: Headers },
+    keepEnvelope = false,
   ): Promise<T> {
 
     const url = new URL(path, `${this.cfg.baseUrl}/`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
     }
-    url.searchParams.set("key", this.cfg.apiKey);
+    // Which credential this path needs. v1 and v2 authenticate the caller and
+    // bill them; x has no billing and no per-caller key, so it carries its own.
+    // A caller never sees or supplies the second one - they prove who they are
+    // with their own key on the billed tools, and that is what earns them the
+    // newer surface.
+    url.searchParams.set(
+      "key",
+      path.startsWith("/api/x/") ? this.cfg.xKey : this.cfg.apiKey,
+    );
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs);
@@ -306,7 +318,11 @@ export class GeoLinkClient {
     if (seen) seen.headers = res.headers;
 
     if (cacheKey) this.cache.set(cacheKey, body.data);
-    return body.data;
+
+    // v1 and v2 put everything in `data`, so unwrapping it is right for them.
+    // x puts `total`, `near` and `next` beside it, and unwrapping first threw
+    // those away - the sweep cursor and the resolved place among them.
+    return (keepEnvelope ? body : body.data) as T;
   }
 
   /* ---------------- Endpoint wrappers ---------------- */
@@ -364,6 +380,136 @@ export class GeoLinkClient {
     return normalizeRoutes(raw);
   }
 
+  /* ---------------- The x surface ---------------- */
+
+  /** An x call, envelope kept: total, near and next sit beside data, not in it. */
+  private xRequest(path: string, params: Params): Promise<any> {
+    return this.request<any>(path, params, undefined, undefined, true);
+  }
+
+  private unwrapX(body: any, shape = false) {
+    const data = body?.data ?? body;
+    return {
+      places: (shape ? [] : Array.isArray(data) ? data : []) as XPlace[],
+      shape: shape ? data : undefined,
+      total: typeof body?.total === "number" ? body.total : undefined,
+      near: body?.near as XNear | undefined,
+      next: body?.next as string | undefined,
+    };
+  }
+
+  /**
+   * Places near a point, or near a place named in words.
+   *
+   * `near` resolves server-side, which removes a round trip the older path
+   * needed: geocode the name here, then search with the coordinates. It also
+   * removes a failure that path could not see - putting the place in the query
+   * and hoping the source infers it works for some names and silently does not
+   * for others. Measured through the API, asking that way for pharmacies in
+   * Aswan returned results in Giza.
+   */
+  async xSearch(opts: {
+    query: string;
+    near?: string;
+    center?: LatLng;
+    language: string;
+    country: string;
+    limit?: number;
+    shape?: boolean;
+  }) {
+    const body = await this.xRequest(ENDPOINTS.xSearch, {
+      query: opts.query,
+      near: opts.near,
+      // near and coordinates together are refused; send whichever was meant.
+      latitude: opts.near ? undefined : opts.center?.lat,
+      longitude: opts.near ? undefined : opts.center?.lng,
+      language: opts.language,
+      country: opts.country,
+      limit: opts.limit,
+      view: opts.shape ? "shape" : undefined,
+    });
+    return this.unwrapX(body, opts.shape);
+  }
+
+  /**
+   * Places across an area, from several vantage points.
+   *
+   * One search sees about three hundred places whatever the query - the
+   * ceiling belongs to the vantage point, not the world - so covering ground
+   * means standing in several places. The API places them at a spacing it
+   * measured: three kilometres apart gives 69% overlap, fifteen gives 11% and
+   * finds nearly twice as many places for fewer calls. This client used to
+   * build that grid itself, three kilometres apart.
+   *
+   * `next` comes back when there is more ground than one request can cover.
+   * Pass it as `cursor` to carry on; it is opaque on purpose.
+   */
+  async xSweep(opts: {
+    query: string;
+    near?: string;
+    center?: LatLng;
+    radiusKm?: number;
+    bounds?: string;
+    language: string;
+    country: string;
+    pagesPerPoint?: number;
+    spacingKm?: number;
+    shape?: boolean;
+    cursor?: string;
+    dryRun?: boolean;
+  }) {
+    const body = await this.xRequest(ENDPOINTS.xSweep, {
+      query: opts.query,
+      near: opts.near,
+      latitude: opts.near ? undefined : opts.center?.lat,
+      longitude: opts.near ? undefined : opts.center?.lng,
+      radius_km: opts.radiusKm,
+      bounds: opts.bounds,
+      language: opts.language,
+      country: opts.country,
+      pages_per_point: opts.pagesPerPoint,
+      spacing_km: opts.spacingKm,
+      view: opts.shape ? "shape" : undefined,
+      next: opts.cursor,
+      dry_run: opts.dryRun ? "true" : undefined,
+    });
+    if (opts.dryRun) {
+      return { places: [] as XPlace[], shape: undefined, total: undefined,
+               near: body?.near as XNear | undefined, next: undefined,
+               plan: body?.data };
+    }
+    return { ...this.unwrapX(body, opts.shape), plan: undefined };
+  }
+
+  /**
+   * Which of these is closest by road, rather than by straight line.
+   *
+   * Not a nicer number for the same answer: measured across eighteen origins,
+   * the nearest place by road was a *different place* than the nearest by line
+   * 22% of the time, and road distance ran 1.6x the line at the median.
+   */
+  async xNearest(opts: {
+    query: string;
+    near?: string;
+    center?: LatLng;
+    language: string;
+    country: string;
+    limit?: number;
+    candidates?: number;
+  }) {
+    const body = await this.xRequest(ENDPOINTS.xNearest, {
+      query: opts.query,
+      near: opts.near,
+      latitude: opts.near ? undefined : opts.center?.lat,
+      longitude: opts.near ? undefined : opts.center?.lng,
+      language: opts.language,
+      country: opts.country,
+      limit: opts.limit,
+      candidates: opts.candidates,
+    });
+    return this.unwrapX(body);
+  }
+
   async distanceMatrix(
     origins: LatLng[],
     destinations: LatLng[],
@@ -371,12 +517,33 @@ export class GeoLinkClient {
     country: string,
   ): Promise<MatrixResult> {
     const fmt = (pts: LatLng[]): string => pts.map((p) => `${p.lat},${p.lng}`).join(";");
-    const raw = await this.request<RawMatrix>(ENDPOINTS.distanceMatrix, {
-      origins: fmt(origins),
-      destinations: fmt(destinations),
-      language,
-      country,
-    });
-    return normalizeMatrix(raw, origins, destinations);
+    const { data, headers } = await this.requestWithHeaders<RawMatrix>(
+      ENDPOINTS.distanceMatrix,
+      { origins: fmt(origins), destinations: fmt(destinations), language, country },
+    );
+
+    // A matrix too large for the API's time budget comes back as a normal 200
+    // with the cells it reached and the rest as zeros. On the wire a cell is
+    // four numbers and nothing else, so an unreached one is indistinguishable
+    // from two points that really are zero metres apart - and the only thing
+    // that tells them apart arrives in these headers.
+    const num = (name: string): number | undefined => {
+      const raw = headers.get(name);
+      if (raw === null) return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const requested = num("x-geolink-matrix-requested");
+
+    const result = normalizeMatrix(data, origins, destinations);
+    if (requested !== undefined) {
+      result.coverage = {
+        requested,
+        attempted: num("x-geolink-matrix-attempted") ?? requested,
+        measured: num("x-geolink-matrix-measured") ?? requested,
+        complete: headers.get("x-geolink-matrix-complete") !== "false",
+      };
+    }
+    return result;
   }
 }

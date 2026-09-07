@@ -6,12 +6,15 @@ import {
   DEFAULT_SWEEP_CONCURRENCY,
   DEFAULT_SWEEP_MAX_POINTS,
   DEFAULT_TIMEOUT_MS,
+  DEFAULT_X_KEY,
 } from "./constants.js";
 
 export type Transport = "stdio" | "http";
 
 export interface Config {
   apiKey: string;
+  /** Credential for the x surface — see DEFAULT_X_KEY. */
+  xKey: string;
   baseUrl: string;
   defaultLanguage: string;
   defaultCountry: string;
@@ -76,6 +79,11 @@ export function loadConfig(): Config {
     defaultLanguage: strEnv("GEOLINK_DEFAULT_LANGUAGE", DEFAULT_LANGUAGE).toLowerCase(),
     defaultCountry: strEnv("GEOLINK_DEFAULT_COUNTRY", DEFAULT_COUNTRY).toLowerCase(),
     timeoutMs: intEnv("GEOLINK_TIMEOUT_MS", DEFAULT_TIMEOUT_MS, 1_000, 120_000),
+    // The x surface has its own credential, separate from a caller's API key -
+    // it is off the billing path entirely, so there is no per-user key to use.
+    // A caller proves who they are with their own key on the v1/v2 tools; this
+    // is what lets those same tools reach the newer surface on their behalf.
+    xKey: strEnv("GEOLINK_X_KEY", DEFAULT_X_KEY),
     maxMatrixCells: intEnv("GEOLINK_MAX_MATRIX_CELLS", DEFAULT_MAX_MATRIX_CELLS, 1, 2_500),
     sweepMaxPoints: intEnv("GEOLINK_SWEEP_MAX_POINTS", DEFAULT_SWEEP_MAX_POINTS, 1, 5_000),
     sweepConcurrency: intEnv("GEOLINK_SWEEP_CONCURRENCY", DEFAULT_SWEEP_CONCURRENCY, 1, 32),

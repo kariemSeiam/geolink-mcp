@@ -222,6 +222,20 @@ Examples:
       }),
     ),
     matrix: z.array(z.array(MatrixCellSchema)).optional(),
+    coverage: z
+      .object({
+        requested: z.number().int(),
+        attempted: z.number().int(),
+        measured: z.number().int(),
+        complete: z.boolean(),
+      })
+      .optional()
+      .describe(
+        "How much of the grid was actually measured. When complete is false, " +
+        "cells that were never reached read as zero — the same four zeros as " +
+        "two points with no distance between them. Ask for a smaller grid to " +
+        "get all of it.",
+      ),
   };
 
   server.registerTool(
@@ -274,12 +288,19 @@ Examples:
 
       const nearest = buildNearest(result.matrix, result.nearest_destination_index, origins, destinations);
 
+      // A matrix too large for the API's time budget comes back as a normal
+      // 200 with the cells it reached and the rest as zeros. Passing that on
+      // without saying so would hand the model a grid where "no route" and
+      // "we ran out of time" are the same four zeros.
+      const partial = result.coverage && !result.coverage.complete;
+
       const structured = {
         origins,
         destinations,
         cells,
         nearest_only: args.nearest_only,
         nearest,
+        ...(result.coverage ? { coverage: result.coverage } : {}),
         ...(args.nearest_only ? {} : { matrix: result.matrix }),
       };
 
@@ -288,6 +309,16 @@ Examples:
         text = JSON.stringify(structured, null, 2);
       } else {
         const lines = [`# Distance matrix: ${origins.length} origin(s) × ${destinations.length} destination(s)`, ""];
+        if (partial && result.coverage) {
+          const { measured, requested } = result.coverage;
+          lines.push(
+            `> **Partial.** ${measured} of ${requested} cells were measured before the ` +
+            `request ran out of time; the rest read as zero because they were never ` +
+            `reached, not because the places are close. Ask for fewer origins or ` +
+            `destinations to get a complete grid.`,
+            "",
+          );
+        }
         lines.push("## Nearest destination per origin");
         for (const n of nearest) {
           lines.push(`- **${n.origin_label}** → **${n.destination_label}**: ${n.distance_text || `${n.distance_meters} m`} / ${n.duration_text || `${n.duration_seconds} s`}`);
