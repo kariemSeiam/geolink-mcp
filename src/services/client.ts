@@ -72,27 +72,64 @@ export class TtlCache<V> {
 
 type Params = Record<string, string | number | undefined>;
 
-function classify(status: number, message: string): GeoLinkError {
-  const m = message.toLowerCase();
-  if (status === 401 || status === 403 || /api key|unauthori|forbidden|invalid key/.test(m)) {
+/**
+ * What the API says went wrong, in a token rather than a sentence.
+ *
+ * Every failure that reaches the engine now carries `X-GeoLink-Error-Code`,
+ * and so does the guard around it — a missing key, a bad key, a missing
+ * parameter. This used to match the error *text* with regular expressions that
+ * never matched the API's actual wording, so a genuinely missing address fell
+ * through to `status >= 500` and was reported as a temporary fault worth
+ * retrying. It was retried twice, with backoff, for a place that does not
+ * exist.
+ */
+const BY_CODE: Record<string, { kind: ErrorKind; hint: string }> = {
+  missing_key: { kind: "auth", hint: "Set GEOLINK_API_KEY. Keys are issued at https://geolink-eg.com/register." },
+  invalid_key: { kind: "auth", hint: "That key was rejected. Check GEOLINK_API_KEY, or issue a new one at https://geolink-eg.com." },
+  access_denied: { kind: "auth", hint: "This key is not allowed to reach that endpoint." },
+  quota_exceeded: { kind: "quota", hint: "The plan's allowance is spent. Wait, reduce call volume, or upgrade." },
+  missing_param: { kind: "bad_request", hint: "The message names the parameter that is missing." },
+  invalid_params: { kind: "bad_request", hint: "The message names what was wrong with it." },
+  invalid_location: { kind: "bad_request", hint: "Check the coordinates: latitude -90..90, longitude -180..180." },
+  location_not_found: { kind: "not_found", hint: "That query did not resolve to a place. Try a different spelling, or give coordinates." },
+  no_results: { kind: "not_found", hint: "The search ran and found nothing there. Broaden the query or widen the area." },
+  route_not_available: { kind: "not_found", hint: "No route between those points. Check they are both reachable by road." },
+  service_temporary: { kind: "upstream", hint: "The source is busy or refused us. Wait before retrying — retrying at once is what causes it." },
+  network_error: { kind: "upstream", hint: "A connection to the source failed. Retry shortly." },
+  timeout: { kind: "timeout", hint: "It took too long. Ask for less, or split the request." },
+  data_error: { kind: "upstream", hint: "The source answered something we could not read. Retry; report it if it persists." },
+  processing_error: { kind: "upstream", hint: "Something failed on our side. Retry shortly." },
+  unexpected_error: { kind: "upstream", hint: "Something failed on our side. Retry shortly." },
+};
+
+function classify(status: number, message: string, code?: string | null): GeoLinkError {
+  const known = code ? BY_CODE[code] : undefined;
+  if (known) {
+    return new GeoLinkError(`GeoLink: ${message}`, known.kind, known.hint);
+  }
+
+  // No code: either an older deployment, or something outside the API's own
+  // error path. The status still separates "you asked wrongly" from "we broke",
+  // and only the second is worth retrying.
+  if (status === 401 || status === 403) {
     return new GeoLinkError(
       `GeoLink rejected the request: ${message}`,
       "auth",
-      "Check GEOLINK_API_KEY. Keys are issued at https://geolink-eg.com/register and passed as the `key` query parameter.",
+      "Check GEOLINK_API_KEY. Keys are issued at https://geolink-eg.com/register.",
     );
   }
-  if (status === 429 || /rate limit|quota|exceed|too many|allowance/.test(m)) {
+  if (status === 429) {
     return new GeoLinkError(
       `GeoLink rate/quota limit hit: ${message}`,
       "quota",
-      "The per-key daily limit or monthly allowance was reached. Wait, reduce call volume (larger grid_spacing_km, smaller limits, nearest_only), or upgrade the plan.",
+      "Wait, reduce call volume, or upgrade the plan.",
     );
   }
-  if (status === 404 || /not found|no result|zero result|nothing found/.test(m)) {
+  if (status === 404) {
     return new GeoLinkError(
       `GeoLink found nothing: ${message}`,
       "not_found",
-      "Try a broader or differently-spelled query, set language to 'en' or 'ar' explicitly, or add a nearby center point (latitude/longitude).",
+      "Try a broader query, a different spelling, or a nearby centre point.",
     );
   }
   if (status >= 500) {
@@ -105,7 +142,7 @@ function classify(status: number, message: string): GeoLinkError {
   return new GeoLinkError(
     `GeoLink rejected the parameters: ${message}`,
     "bad_request",
-    "Verify coordinates are valid decimal degrees (lat -90..90, lng -180..180), the query is non-empty, and language/country are 2-letter codes.",
+    "Verify coordinates are valid decimal degrees, the query is non-empty, and language/country are 2-letter codes.",
   );
 }
 
@@ -147,7 +184,12 @@ export class GeoLinkClient {
    */
   private static readonly RETRYABLE: ReadonlySet<ErrorKind> = new Set<ErrorKind>(["timeout", "network", "upstream"]);
 
-  private async request<T>(path: string, params: Params, cacheKey?: string): Promise<T> {
+  private async request<T>(
+    path: string,
+    params: Params,
+    cacheKey?: string,
+    seen?: { headers?: Headers },
+  ): Promise<T> {
     if (cacheKey) {
       const hit = this.cache.get(cacheKey);
       if (hit !== undefined) return hit as T;
@@ -163,7 +205,7 @@ export class GeoLinkClient {
         await new Promise((resolve) => setTimeout(resolve, backoff + Math.random() * backoff));
       }
       try {
-        return await this.attempt<T>(path, params, cacheKey);
+        return await this.attempt<T>(path, params, cacheKey, seen);
       } catch (err) {
         if (!(err instanceof GeoLinkError) || !GeoLinkClient.RETRYABLE.has(err.kind)) throw err;
         lastError = err;
@@ -172,7 +214,30 @@ export class GeoLinkClient {
     throw lastError ?? new GeoLinkError("Request failed", "upstream", "Retry shortly.");
   }
 
-  private async attempt<T>(path: string, params: Params, cacheKey?: string): Promise<T> {
+  /**
+   * Like `request`, but hands back what the response said about itself.
+   *
+   * Some answers carry facts in headers rather than in the body — whether a
+   * matrix was fully measured, for one. Those belong to the call that asked,
+   * not to the client: a field on a shared client is wrong the moment two
+   * requests overlap, which on a server handling several sessions is
+   * immediately.
+   */
+  async requestWithHeaders<T>(
+    path: string,
+    params: Params,
+  ): Promise<{ data: T; headers: Headers }> {
+    const seen: { headers?: Headers } = {};
+    const data = await this.request<T>(path, params, undefined, seen);
+    return { data, headers: seen.headers ?? new Headers() };
+  }
+
+  private async attempt<T>(
+    path: string,
+    params: Params,
+    cacheKey?: string,
+    seen?: { headers?: Headers },
+  ): Promise<T> {
 
     const url = new URL(path, `${this.cfg.baseUrl}/`);
     for (const [k, v] of Object.entries(params)) {
@@ -225,7 +290,7 @@ export class GeoLinkClient {
 
     if (!res.ok || body.success === false) {
       const message = typeof body.error === "string" && body.error ? body.error : `HTTP ${res.status}`;
-      throw classify(res.status, message);
+      throw classify(res.status, message, res.headers.get("x-geolink-error-code"));
     }
     if (body.data === undefined || body.data === null) {
       throw new GeoLinkError(
@@ -234,6 +299,11 @@ export class GeoLinkClient {
         "Retry; if it persists, report the request to hello@geolink-eg.com.",
       );
     }
+
+    // What the response said about itself, for the caller that asked for it.
+    // Dropping these is why a partly-measured matrix used to be
+    // indistinguishable from a complete one.
+    if (seen) seen.headers = res.headers;
 
     if (cacheKey) this.cache.set(cacheKey, body.data);
     return body.data;
