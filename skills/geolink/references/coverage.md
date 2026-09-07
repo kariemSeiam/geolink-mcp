@@ -1,85 +1,109 @@
 # Covering an area without leaving holes
 
-A sweep lays a grid over a bounding box and runs one search per cell. Whether
-the result is *complete* depends on three things, and all three are inspectable
-from what the tool returns.
+A sweep reads an area from several vantage points and merges what each one saw.
+Whether the result is *complete* fails in three independent ways, and the answer
+reports two of them itself.
 
-## 1. Spacing has to be smaller than the reach of each search
+## 1. Spacing is the API's job now, and the measurement says why
 
-Each grid point searches outward from itself. The worst-served location in a
-grid is the corner of a cell, which sits `spacing × 0.71` away from the
-nearest query point. If the source's useful reach around a point is shorter
-than that, corners fall through the grid.
+Each vantage point searches outward from itself, so the worst-served location is
+the corner of a cell, `spacing × 0.71` from the nearest point. That much has not
+changed. What changed is who picks the number, and the measurement that settled
+it:
 
-| Spacing | Worst-case distance to the nearest query point |
-|---|---|
-| 2 km | 1.4 km |
-| 3 km | 2.1 km |
-| 5 km | 3.5 km |
-| 7 km | 5.0 km |
+| Spacing | Overlap between neighbours | Places found | Verdict |
+|---|---|---|---|
+| 3 km | 69% | 472 | most calls spent re-reading the same places |
+| 15 km | 11% | 818 | the knee |
 
-Dense categories in a city — pharmacies, cafés, ATMs — have short reach because
-the nearest twenty results are all within a few hundred metres. Use 2–3 km.
-Sparse categories — hospitals, universities, factories — reach much further,
-so 5–7 km costs less and misses nothing.
+Tightening the grid feels safer and is not. At 3 km the points mostly see each
+other's places; the extra calls buy duplicates, not ground. Reach was measured at
+p50 ≈ 4 km and p90 ≈ 10 km, and 15 km spacing is what covers that without paying
+for the overlap.
 
-## 2. A saturated cell is an under-reported cell
+`spacing_km` still exists, takes 2–50, and should almost always be left unset.
+Tighten it only for a category so dense that the search's own reach collapses —
+and check the result against `results_complete` rather than against intuition,
+because the symptom of a too-dense category is depth, not spacing (§2).
 
-This is the failure that hides. If a grid point returns exactly
-`results_per_point` places, that point did not run out — it hit the number
-you gave it. Everything past that number in that cell is invisible, and the
-sweep will still look successful.
+## 2. `results_complete: false` — the count is a floor
 
-**The test:** compare `stats.raw_results` against
-`plan.grid_points × plan.results_per_point`. As that ratio approaches 1, the
-grid is saturated and the count is a floor, not a total.
+The failure that hides. A vantage point that stops paging before the source runs
+dry saw only part of what was there, and the sweep still looks successful. This
+used to require arithmetic against the plan; the answer now says it outright.
 
-**The fix,** in order of preference:
+**The test:** read `results_complete`. `false` means at least one point still had
+more to give, and `total` is a lower bound. `true` means the source ran out.
+**Absent means the API did not say** — not that it is complete.
 
-1. Raise `results_per_point` and re-run `dry_run` to see the new cost.
-1. Halve `grid_spacing_km` — more cells, each with less to hold.
-1. Sweep the dense districts separately at tighter spacing, and the rest coarsely.
+**The fix:** raise `pages_per_point` (up to 15). Measured on a 10 km sweep of
+Zamalek:
 
-Option 3 is usually right for a city: one sweep at uniform spacing spends most
-of its calls on empty ground and still saturates downtown.
+| `pages_per_point` | `total` | `results_complete` | wall clock |
+|---|---|---|---|
+| 5 (default) | 100 | false | 1.7 s |
+| 10 | 200 | false | 2.0 s |
+| 15 | 218 | **true** | 3.3 s |
 
-## 3. The edges have to actually be inside the box
+The default returns 46% of the pharmacies in Zamalek. It is the right default —
+depth costs upstream reads and most questions do not need all of them — but a
+count quoted from it is "at least 100", never "100".
 
-A named area gets its bounds from the geocoder's viewport, which is often
-tighter than the administrative boundary — a district's viewport can exclude
-the streets on its far edge.
+For a single point, `geolink_search_places` with `limit: 0` does the same thing
+and is the cheapest way to learn the true number for one neighbourhood.
 
-**The test:** reverse-geocode the four corners and the centre of
-`area.bounds`. If a corner comes back with a district that never appears in
-`stats.by_district`, the grid stopped short of ground that belongs to the area.
+## 3. `area_fully_swept: false` — ground never visited
 
-**The fix:** `padding_km` of 1–3 for a district, 3–5 for a city. Padding
-costs cells, so pad and re-run `dry_run` before running for real.
+A different failure with a different fix, and the one most easily confused with
+§2. The sweep ran out of time before reaching every vantage point. The points it
+did reach may have been read perfectly.
 
-## Reading the statistics like an inspector
+**The test:** read `area_fully_swept`. `false` arrives with `continue_from`.
 
-- `raw_results` ÷ `unique_results` near 1.0 — tiles are not overlapping.
-  Neighbouring cells should both see the places between them; when they never
-  do, the spacing is wider than the reach and there is ground between the
-  points that neither one covered.
-- The same ratio above ~3 — heavy overlap. Coverage is safe but calls are being
-  spent re-reading the same places. Widen the spacing.
-- `points_failed` above zero — some cells returned nothing due to a transient
-  error, and those cells are simply missing from the result. `failed_details`
-  names them; re-run the sweep over just that sub-area rather than repeating
-  the whole grid.
-- A district in `by_district` with a count of 1–2 in a region where
-  neighbouring districts have dozens — either genuinely sparse, or one grid
-  point landed in it and saturated. Check its area before believing the number.
+**The fix:** call again passing `continue_from` verbatim, and merge. It is
+opaque on purpose — it encodes where the sweep stopped, not a position you can
+construct or reason about.
+
+§2 and §3 are unrelated. A response can be short on either, both, or neither,
+and applying the wrong remedy leaves the other one silently in place.
+
+## 4. The edges — the one test nothing inside a sweep can run
+
+A named area gets its bounds from the geocoder's viewport, which is often tighter
+than the administrative boundary. Nothing inside a sweep can see what its own
+bounds left out.
+
+**The test:** reverse-geocode the four corners and the centre of the area. If a
+corner comes back with a district that never appears in the `by_district`
+breakdown, the sweep stopped short of ground that belongs to the area.
+
+**The fix:** sweep that district by name as its own area, and add the result.
+There is no padding parameter any more — the area you name is the area you get,
+which is one fewer knob and one fewer thing to get subtly wrong.
+
+## Reading the answer like an inspector
+
+- **`view: "summary"` first.** It answers "how many" and "which districts" for a
+  fraction of the tokens, and its `by_district` is what §4 is checked against.
+  Only ask for the places once you know the count is worth listing.
+- **`resolved_to`, every time.** Names collide. A sweep of the wrong Nasr City
+  is indistinguishable from a sweep of the right one, and this field is the only
+  thing that tells them apart.
+- **A district with 1–2 where its neighbours have dozens** — either genuinely
+  sparse, or the sweep reached it shallowly. Check `results_complete` before
+  believing it.
+- **`has_more` is not a completeness signal.** It means places already found and
+  not yet shown. Paging with `offset` is free — it is served from the answer
+  already in hand, not a second sweep.
 
 ## Sparse queries need a second look
 
-The source occasionally answers a sparse query with a shorter list than it
-holds — measured at about one call in four for rare names, never observed on
-dense ones. The server already re-reads a page that looks like the end before
-accepting it, so a single tool call is protected.
+The source occasionally answers a sparse query with a shorter list than it holds
+— measured at about one call in four for rare names, never observed on dense
+ones. The server already re-reads a page that looks like the end before accepting
+it, so a single tool call is protected.
 
 What is *not* protected is a conclusion drawn from one narrow query. "There are
 no pharmacies in this village" deserves a second query with a different phrasing
-or the other language before it becomes an answer. Arabic and English indexes
-do not contain identical sets.
+or the other language before it becomes an answer. Arabic and English indexes do
+not contain identical sets.

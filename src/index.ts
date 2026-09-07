@@ -76,19 +76,27 @@ export function buildServer(cfg: Config): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
-      instructions: `GeoLink gives you location intelligence: geocoding, place search, directions, distance matrix, and grid-based area sweeps. Inputs accept coordinates ("lat,lng") or place names anywhere a location is needed; names are geocoded automatically and cached. Defaults: language=${cfg.defaultLanguage}${cfg.defaultCountry ? `, country=${cfg.defaultCountry}` : ""}.
+      instructions: `GeoLink gives you location intelligence: geocoding, place search, directions, travel times, and reading a whole area rather than one point. Inputs accept coordinates ("lat,lng") or place names anywhere a location is needed. Defaults: language=${cfg.defaultLanguage}${cfg.defaultCountry ? `, country=${cfg.defaultCountry}` : ""}.
 
 Pick tools by task:
 - One address ⇄ coordinates: geolink_geocode / geolink_reverse_geocode.
-- Places near a point: geolink_search_places — one center, as deep as the limit you ask for; source_exhausted tells you when there are no more.
-- Every place of a kind across a district/city/governorate: geolink_sweep_area — ALWAYS dry_run=true first to see the API-call count; raise results_per_point for dense categories.
+- Places near a point: geolink_search_places — one centre, as deep as you ask. limit=0 reads it until the source runs dry, which is the only way to learn how many there actually are.
+- Every place of a kind across a district, city or governorate: geolink_sweep_area — it reads the ground from several vantage points and merges them. view="summary" answers "how many" and "which districts" for a fraction of the tokens.
 - A → B: geolink_get_directions (default 'summary'; ask for 'polyline' only when drawing a map).
 - Many-to-many travel times: geolink_distance_matrix (≤ ${cfg.maxMatrixCells} cells).
-- "Which branch/pharmacy is really closest by road?": geolink_find_nearest.
+- "Which branch or pharmacy is really closest?": geolink_find_nearest. Measured across 18 origins, the nearest by road was a *different place* than the nearest by straight line 22% of the time.
 
-All results include address_parts {district, governorate, country} — group and filter on those rather than parsing address strings.
+**Read the completeness fields before you report a number.** On this data a wrong answer and a right answer are the same JSON, and nothing fails loudly.
+- \`results_complete: false\` means the source still had more to give — \`total\` is a floor, so say "at least". Fix it with limit=0 on a search, pages_per_point on a sweep, candidate_limit on find_nearest.
+- \`area_fully_swept: false\` is a different failure: ground never visited. It comes with \`continue_from\`, which you pass back verbatim.
+- Either field *absent* means the API did not say. That is not the same as true.
+- \`has_more\` is neither of those — it is places already found and not yet shown. Paging with offset is free; it is served from the answer already in hand.
 
-Depth is not coverage: a large limit reads one center more deeply, a sweep reads new ground. A search from one point never finds what is in the next district, however large the limit.
+Names collide, so anywhere you pass one, read \`resolved_to\` back. An answer about the wrong Nasr City looks exactly like an answer about the right one.
+
+Every place carries address_parts {district, governorate, country} — group and filter on those rather than parsing address strings — plus category, type, timezone, and, when the place has one, a rating with the count it rests on, a phone, a website and today's hours. An absent field means the place genuinely has no such thing; nothing is padded with a zero to hide a gap.
+
+Depth is not coverage: a large limit reads one centre harder, a sweep reads new ground. A search from one point never finds what is in the next district, however large the limit.
 
 Resources worth reading before a large job: geolink://playbook (which tool answers which question), geolink://scale (measured cost and latency), geolink://playbook/coverage (how to cover an area without leaving holes), geolink://playbook/recipes (compositions), geolink://capabilities (limits and cost formulas).`,
     },

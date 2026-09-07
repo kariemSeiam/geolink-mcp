@@ -15,12 +15,12 @@ would have done.
 ## 2026-09-03 · pharmacies in Nasr City
 
 claim:        at least 412
-area:         {place: "Nasr City"} + padding_km 2
+area:         {place: "Nasr City"}
 spacing:      2 km, 61 grid points
 depth:        40 per point (2 requests each)
 cost:         122 calls, 41 s
 
-saturation:   raw 1,180 / (61 × 40) = 0.48       not saturated
+completeness: results_complete true, area_fully_swept true
 overlap:      raw 1,180 / unique 412 = 2.86      healthy
 edges:        4 corners + centre reverse-geocoded; all 5 districts
               present in by_district                          clean
@@ -32,14 +32,14 @@ verdict:      complete for this wording. "صيدلية" only — an English-lang
 
 The `verdict` line is the one that matters. It is where the honest limitation
 goes: the wording that was used, the language that was not tried, the districts
-that came back thin, the cells that saturated. A row without a limitation is
+that came back thin, whichever completeness field came back false. A row without a limitation is
 usually a row where nobody looked.
 
 ## What to record
 
 | Field | Why |
 |---|---|
-| claim | the number as delivered, with "at least" if any cell saturated |
+| claim | the number as delivered, with "at least" if either completeness field was false |
 | area, spacing, depth | so the run can be reproduced or widened |
 | cost | so the next person can budget before asking |
 | saturation, overlap, edges | the three completeness tests, with their arithmetic |

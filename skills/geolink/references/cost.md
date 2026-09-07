@@ -9,15 +9,24 @@ with `node scripts/probe.mjs` rather than trusting the page — the upstream mov
 |---|---|
 | `geolink_geocode` | 1, cached 10 minutes |
 | `geolink_reverse_geocode` | 1, cached 10 minutes |
-| `geolink_search_places` | `ceil((limit + offset) / 20)`, fewer when the area runs out; +1 if `near` is a name |
+| `geolink_search_places` | **1**, whatever the depth — a name in `near` costs nothing extra |
 | `geolink_get_directions` | 1, +1 per endpoint given as a name |
 | `geolink_distance_matrix` | **1, whatever the grid size**, +1 per named location |
-| `geolink_find_nearest` | 1 matrix + the search, in discovery mode |
-| `geolink_sweep_area` | `grid_points × ceil(results_per_point / 20)`, +1 if the area is a name |
+| `geolink_find_nearest` | **1** in search mode; 1 matrix + geocodes when you pass a list |
+| `geolink_sweep_area` | **1 per call**; `dry_run` says how many calls the whole area needs. +1 geocode when the area is `{place}` |
 
-The page size is 20. Depth is bought in units of 20, and the engine stops early
-the moment the area runs out, so asking for 100 in a place that holds 30 costs
-two requests, not five.
+Three of those became 1 when the paging, the grid and the road-ranking moved
+server-side. What used to cost this client sixteen requests for a deep search is
+now one request that the API pages behind. The cost did not disappear — it moved
+to where it can be measured against a time budget instead of a call count.
+
+`dry_run` on a sweep is the only place a caller still needs to plan: it reports
+`requests_needed` and `estimated_seconds`, and `fits_in_one_request: false`
+means the answer will arrive in pieces joined by `continue_from`.
+
+**Paging is free.** Whole search and sweep answers are cached, so `offset` is
+served from the answer already in hand. A second page never costs a second
+sweep.
 
 ## Measured, 2026-09-03, against `geolink-eg.com`
 
@@ -76,26 +85,24 @@ Two guards, both env-tunable, both naming the exact fix in the error:
 | Guard | Default | Variable |
 |---|---|---|
 | matrix cells (`origins × destinations`) | 100 | `GEOLINK_MAX_MATRIX_CELLS` |
-| sweep API calls | 200 | `GEOLINK_SWEEP_MAX_POINTS` |
 
-Nothing else has a ceiling. `limit` and `results_per_point` take any value; cost
-scales linearly and the search stops early on its own.
+That is the only request this server refuses on size, and the error names the
+parameter change that would succeed. `limit`, `pages_per_point` and the area of
+a sweep have no client-side ceiling.
 
-## Concurrency, and why it is bounded
+## What bounds a sweep now
 
-A sweep runs several grid points at once, and each point that asks for depth
-makes its own parallel requests — the two multiply. The upstream reaches its
-source from a single address with no proxy rotation, and a wide simultaneous
-burst of near-identical requests is the pattern most likely to be throttled.
+Not a call count — a time budget, enforced by the API. That is a better bound
+because it is the thing that actually runs out, and because a request that hits
+it can hand back `continue_from` and be resumed, where a refused request could
+only be re-planned.
 
-Points in flight are therefore divided down as `results_per_point` rises, holding
-the product within a fixed budget. At default depth nothing changes: one request
-per point, four points at a time. At `results_per_point: 60` the server runs two
-points at a time instead of four, and says so in `plan.concurrency`.
+It also means **a large area does not fail, it arrives in pieces**. Check
+`area_fully_swept`; if it is `false`, you have part of the ground and a token for
+the rest. A caller that ignores the field gets a plausible partial answer with
+nothing marking it as partial.
 
-The budget exists because of the single address, not because of the source's
-published limits — it is a guess at what looks automated, deliberately
-conservative. Where the upstream is configured with proxy rotation
-(`ENABLE_PROXY`), the burst leaves from several addresses and the reason for the
-budget weakens; raising `GEOLINK_SWEEP_CONCURRENCY` is defensible there and is
-not defensible without it.
+The concurrency budget that used to live in this client is gone with the grid it
+was protecting. The upstream reaches its source from one address without proxy
+rotation, and pacing that burst is now the engine's problem, decided next to the
+measurements it depends on rather than three layers away from them.

@@ -36,7 +36,8 @@ line — those are the accounts a human would have assigned wrong.
 1. Sweep a demand proxy across the same region with identical bounds and
    spacing — schools, mosques, markets, whatever generates footfall for the
    business.
-1. Compare `stats.by_district` between the two. A district high in demand and
+1. Compare the `by_district` breakdowns between the two — `view: "summary"` gives them for a fraction of the tokens. Check `results_complete` on both first: a floor divided by a total is not a ratio.
+1.  A district high in demand and
    low in supply is a candidate.
 1. Confirm with `geolink_find_nearest` from the candidate district's centre:
    if the closest existing competitor is a long drive, the gap is real.

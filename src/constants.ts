@@ -48,8 +48,6 @@ export const DEFAULT_SEARCH_LIMIT = UPSTREAM_PAGE_SIZE;
 export const KM_PER_DEG_LAT = 111.32;
 
 export const DEFAULT_MAX_MATRIX_CELLS = 100;
-export const DEFAULT_SWEEP_MAX_POINTS = 200;
-export const DEFAULT_SWEEP_CONCURRENCY = 4;
 
 /**
  * Ceiling on simultaneous upstream requests during a sweep.
@@ -62,16 +60,12 @@ export const DEFAULT_SWEEP_CONCURRENCY = 4;
  * this product never grows past this number. At default depth nothing
  * changes: one request per point, `sweepConcurrency` points at a time.
  */
-export const SWEEP_OUTBOUND_BUDGET = 8;
 
 /**
  * How many requests the upstream engine runs in parallel to satisfy one deep
  * search. Mirrors its server-side batch width; used only to predict how many
  * requests a single deep grid point puts in flight.
  */
-export const SWEEP_CLIENT_BATCH = 5;
-export const DEFAULT_DEDUPE_METERS = 60;
-export const DEFAULT_GRID_SPACING_KM = 3;
 
 /** In-process cache for geocode / reverse-geocode lookups. */
 export const CACHE_MAX_ENTRIES = 500;

@@ -48,8 +48,8 @@ produces dozens of genuinely distinct places sharing one string.
 **The check.** Identity is coordinates. Compare, de-duplicate, and count on
 `location`, rounded to about 4 decimal places (~11 m). Use names for display
 only. When name-based de-duplication is wanted, it must be paired with a
-distance threshold — which is exactly why `dedupe_meters` exists and why setting
-it too high silently merges distinct places.
+distance threshold — which is exactly why the engine merges on both name and
+distance rather than on either alone, and why doing it too high silently merges distinct places.
 
 **Passes when:** every count, overlap or de-duplication in the analysis is
 computed from coordinates, and any name-based grouping states its distance bound.
@@ -88,16 +88,15 @@ least six" floor, never a limit on the data. Asking for more returned 300.
 
 **Why here.** Scraped sources have internal pagination knobs that leak outward as
 apparent scarcity, and the ask is usually invisible. The law cuts both ways, and
-the upward direction is easier to miss because a large number feels like success:
-a surprisingly *high* unique count usually means `dedupe_meters` was set too low
-or coordinate rounding stopped merging genuine duplicates, not that the district
-is unusually rich.
+upward is easier to miss because a large number feels like success: a surprisingly
+*high* unique count usually means duplicates stopped merging, not that the
+district is rich.
 
 **Point it at your own instrument too.** The knob that produces a wrong number is
-as often on this side as on the source's. `GEOLINK_SWEEP_MAX_POINTS` defaults to
-200; an agent that hits it and reports "this area is too large to sweep" has just
-reproduced this exact failure using our own parameter instead of the upstream's.
-The area is not too large. The budget is 200 and it is tunable.
+as often ours as the source's. This client once refused areas above its own
+200-call ceiling, and an agent hitting it reported "this area is too large to
+sweep" — the same failure, with our parameter. The area was not too large; the
+number was. That ceiling is gone, replaced by a resumable time budget.
 
 **The check.** Any count that is round, suspiciously stable across different
 queries, or larger than the ground plausibly holds, gets traced to the parameter
@@ -129,23 +128,28 @@ it, and pagination has been followed to its end.
 
 ---
 
-## 6. The saturated cell — coverage that reports a floor as a total
+## 6. Two ways to be incomplete, and the wrong remedy for each
 
-**What happened.** A sweep tiles an area and searches each cell. A cell that
-returns exactly the number of results it was allowed to return did not run out
-of places — it ran out of permission. Everything past that number in that cell is
-invisible, and the sweep still reports a total that looks authoritative.
+**What happened.** A vantage point that stops paging before the source runs dry
+ran out of permission, not places, and the sweep still reports a total that looks
+authoritative — a default sweep of Zamalek returns 100 pharmacies where drained
+it returns 218. The answer says so now, but in **two fields that fail
+independently and take different fixes**; reading one while assuming the other is
+the same mistake wearing a new coat.
 
-**Why here.** Density is never uniform. One downtown cell can hold more matches
-than an entire rural quadrant of the same grid.
+| Field | `false` means | Fix |
+|---|---|---|
+| `results_complete` | the points visited still had more to give; `total` is a floor | `pages_per_point` (≤15), or `limit: 0` on a search |
+| `area_fully_swept` | the sweep ran out of time with ground unvisited | pass `continue_from` back and merge |
 
-**The check.** Compare `stats.raw_results` against
-`plan.grid_points × plan.results_per_point`. As that ratio approaches 1, the grid
-is saturated and the number is a lower bound. Raise `results_per_point`, tighten
-spacing, or sweep the dense districts separately.
+**Why here.** Density is never uniform, so both can be true at once: downtown
+points saturate while the sweep also times out before reaching the rural ones.
 
-**Passes when:** the saturation ratio is computed and stated, and any total near
-saturation is reported as "at least N", never as "N".
+**The check.** Read both. An *absent* field means "not told", never `true` —
+undefined read as complete is the reading that stops you looking.
+
+**Passes when:** both fields are stated, the applicable remedy was applied or
+explicitly declined, and any total still short is reported as "at least N".
 
 ---
 
@@ -160,13 +164,14 @@ city's box.
 **Why here.** The source returns what a map would show, not what a boundary file
 would define. There is no boundary geometry in this API at all.
 
-**The check.** Reverse-geocode the four corners and the centre of the bounds you
-were given. A corner returning a district that never appears in your results is
-ground the grid stopped short of. A corner returning a *different city* means the
-viewport is far too loose and the area needs `{center, radius_km}` instead.
+**The check.** Reverse-geocode the four corners and the centre of the bounds. A
+corner returning a district absent from your results is ground the sweep stopped
+short of; one returning a *different city* means the viewport is far too loose
+and the area needs `{center, radius_km}` instead.
 
-**Passes when:** the corners have been probed, and any correction is applied with
-`padding_km` before the real run, not after.
+**Passes when:** the corners have been probed, and any district found there but
+missing from the results has been swept by name as its own area and added. There
+is no padding parameter — the area you name is the area you get.
 
 ---
 
@@ -193,29 +198,24 @@ ratio is surfaced rather than smoothed over.
 
 ## 9. Concurrency that keeps the index and loses the order
 
-**What happened.** The distance matrix ran one request per origin-destination
-pair in a thread pool and collected them with `as_completed`, which yields
-futures as they finish rather than as they were submitted. The pair index was
-recovered correctly from the future and then discarded: each result was appended
-to its row, so every destination's travel time landed in whichever column its
-request happened to return in. Meanwhile the destination list echoed back to the
-caller was built by walking the destinations that were sent, so it was always in
-the right order. The two halves of the response disagreed, and
-`nearest_destination_index` pointed into the scrambled half — so "which of these
-is closest" returned a real place chosen at random.
+**What happened.** The distance matrix collected its per-pair requests with
+`as_completed`, which yields futures as they finish. The pair index was recovered
+correctly and then discarded — each result was *appended* to its row, so every
+travel time landed in whichever column its request happened to return in. The
+echoed destination list was built from what was sent, so it stayed in order. The
+two halves disagreed, `nearest_destination_index` pointed into the scrambled
+half, and "which of these is closest" returned a real place chosen at random.
 
 **Why here.** Nothing about the response looked wrong. It was well-formed, fully
 populated, internally plausible, and every number in it was a genuine
 measurement of something — just of the wrong pair. It only appears with more
 than one destination, so every single-destination test passed.
 
-**The check.** Assert a physical invariant on results that claim to be
-distances: a road route cannot be shorter than the straight line between its own
-endpoints. It costs nothing, it is not a heuristic, and it is what surfaced this
-— one destination measured 5184 m alone and 2759 m inside a four-destination
-call. Where a result can be obtained two ways, obtain it both ways once and
-compare; agreement between an isolated call and a batched one is the cheapest
-proof that a batch preserves identity.
+**The check.** Assert a physical invariant: a road route cannot be shorter than
+the straight line between its own endpoints. It costs nothing, it is not a
+heuristic, and it is what surfaced this — one destination measured 5184 m alone
+and 2759 m inside a four-destination call. Where a result can be obtained two
+ways, obtain it both ways once and compare.
 
 **Passes when:** every distance in a batched result is at least the straight-line
 distance for its own pair, and a spot-checked entry matches the same query made
@@ -223,21 +223,23 @@ alone.
 
 ## 10. A cache keyed on less than the request
 
-**What happened.** Twice, in two different codebases, the same bug: a search
-cache keyed on query, location and language — but not on how many results were
-asked for. A shallow answer was then served to a request that asked for far
-more, and the caller received 20 results for a request for 100 with nothing
-indicating a cache hit.
+**What happened.** Three times now, in three codebases. Twice a search cache was
+keyed on query, location and language but not on depth, so a shallow answer was
+served to a request for far more — 20 results for a request for 100, with nothing
+indicating a cache hit. The third was subtler: a cache stored the *unwrapped*
+body for calls that needed the whole envelope, so the second identical call got
+the places and silently lost the fields beside them.
 
-**Why here.** Depth was added to an interface that already had caching. The key
-was written before depth existed and nothing forces it to be revisited.
+**Why here.** Caching is always older than the parameter that breaks it. The key
+was written before depth existed, and before anything travelled outside `data`.
 
 **The check.** Every parameter that changes the response must appear in the cache
 key. When adding a parameter to a cached call, the key is part of the change, not
 a follow-up.
 
-**Passes when:** the key contains every argument the response depends on, and a
-same-query-different-depth pair has been tested for correct behaviour.
+**Passes when:** the key contains every argument the response depends on, the
+cache stores what the call actually returns, and a same-query-different-depth
+pair has been tested.
 
 ---
 
@@ -253,29 +255,32 @@ complete one.
 inside a single request. They can only be distinguished by asking twice.
 
 **The check.** A terminal signal is confirmed before it is believed. The engine
-now re-reads a page that looks like the end; any analysis layered on top should
-apply the same principle to its own stopping rules — a district with zero results
-gets a second look before it is reported as empty.
+re-reads a page that looks like the end, and a walk now reports whether it
+drained the source or was cut off — the two used to be the same short list. Apply
+the same principle to your own stopping rules: a district with zero results gets
+a second look before it is reported empty.
 
-**Passes when:** no conclusion rests on a single observation of absence.
+**Passes when:** no conclusion rests on a single observation of absence, and
+`results_complete` was read rather than inferred from the length of the list.
+"Fewer came back than I asked for, so that is all there is" is the arithmetic
+this tripwire is named after — a walk stopped by a throttle comes back short too.
 
 ---
 
 ## Quick audit
 
 ```bash
-# saturation: is the sweep's total a floor rather than a total?
-#   ratio = stats.raw_results / (plan.grid_points * plan.results_per_point)
-#   ratio -> 1.0 means saturated
+# is this a total or a floor? two fields, two remedies, read both
+#   results_complete === false  -> raise pages_per_point (<=15), or limit: 0
+#   area_fully_swept === false  -> pass continue_from back and merge
+#   either one undefined        -> not told; do NOT read as complete
 
-# overlap health: are neighbouring tiles seeing each other's places?
-#   ratio = stats.raw_results / stats.unique_results
-#   ~1.0 = tiles never overlap -> ground between them was covered by neither
-#   >3.0 = heavy overlap -> coverage safe, calls wasted
+# is the matrix all there? unmeasured cells are four zeros, same as "no distance"
+#   coverage.complete === false -> ask for a smaller grid
 
 # regenerate every measured number in these files against the live API
 node scripts/probe.mjs
 ```
 
-Machine checks catch saturation and overlap. They do not catch tripwires 3, 5, 7
-or 8 — those need the comparison written out by hand.
+The machine reports completeness now; it does not report tripwires 3, 5, 7 or 8,
+which still need the comparison written out by hand.

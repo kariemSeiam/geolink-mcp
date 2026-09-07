@@ -4,8 +4,6 @@ import {
   ENDPOINTS,
   SERVER_NAME,
   SERVER_VERSION,
-  SWEEP_CLIENT_BATCH,
-  SWEEP_OUTBOUND_BUDGET,
   UPSTREAM_PAGE_SIZE,
 } from "./constants.js";
 import { EGYPT_GOVERNORATES } from "./data/governorates.js";
@@ -51,48 +49,48 @@ export function registerResources(server: McpServer, ctx: ToolContext): void {
           country: ctx.cfg.defaultCountry,
           timeout_ms: ctx.cfg.timeoutMs,
           search_limit: UPSTREAM_PAGE_SIZE,
-          sweep_results_per_point: UPSTREAM_PAGE_SIZE,
-          sweep_grid_spacing_km: 3,
+          sweep_spacing_km: "chosen by the API from measured behaviour, not set here",
+          sweep_pages_per_point: "the API's own default",
         },
         tools: {
           geolink_geocode: "address or name → one place with viewport bounds",
           geolink_reverse_geocode: "lat,lng → address with district and governorate",
-          geolink_search_places: "text query around one center → places, as deep as `limit` asks",
+          geolink_search_places: "text query around one center → places with rating, phone, hours and category; limit=0 reads until the source runs dry",
           geolink_get_directions: "A → B routes; geometry opt-in (summary | polyline | waypoints)",
           geolink_distance_matrix: "N×M travel times plus the nearest destination per origin",
-          geolink_find_nearest: "rank known or discovered candidates by road time from one origin",
-          geolink_sweep_area: "grid-tile a region and merge the searches; dry_run first",
+          geolink_find_nearest: "rank options by road time from one origin — a different answer from the straight line, not a rounder one",
+          geolink_sweep_area: "read a whole region from several vantage points and merge them; view=summary for counts",
         },
         cost_model: {
           unit: "upstream HTTP requests",
           geocode: 1,
           reverse_geocode: 1,
-          search_places: `ceil((limit + offset) / ${UPSTREAM_PAGE_SIZE}), fewer when the area runs out; +1 if \`near\` is a name`,
+          search_places: "1 request to GeoLink; it does its own paging behind that. A name in `near` costs nothing extra - the API resolves it",
           get_directions: "1, +1 per endpoint passed as a name",
           distance_matrix: "1 regardless of grid size, +1 per location passed as a name",
-          find_nearest: "1 matrix, plus the search cost in discovery mode",
-          sweep_area: `grid_points × ceil(results_per_point / ${UPSTREAM_PAGE_SIZE}), +1 if the area is a name`,
-          caching: "geocode and reverse-geocode results are cached in-process for 10 minutes, keyed by query, language, country and depth",
+          find_nearest: "1 request in search mode; 1 matrix plus geocodes when you pass a list of candidates",
+          sweep_area: "1 request per call; dry_run reports how many calls the whole area needs. +1 geocode when the area is given as {place}",
+          caching: "geocodes are cached in-process for 10 minutes. Whole search and sweep answers are cached too, so paging with offset costs nothing - it is served from the answer already in hand",
           cheapest_win: "pass coordinates instead of names wherever you already have them",
         },
         limits: {
           refuses_above: {
             matrix_cells: ctx.cfg.maxMatrixCells,
-            sweep_api_calls: ctx.cfg.sweepMaxPoints,
             detail:
-              "These two are the only requests the server refuses on size. Both are env-tunable (GEOLINK_MAX_MATRIX_CELLS, GEOLINK_SWEEP_MAX_POINTS) and both errors name the exact parameter change that would succeed.",
+              "The only request this server refuses on size. Env-tunable (GEOLINK_MAX_MATRIX_CELLS), and the error names the exact parameter change that would succeed. A sweep is bounded by the API's own time budget instead, which is why it can hand back `continue_from` rather than refuse.",
           },
           no_ceiling_on: {
-            search_limit: "any positive integer; cost scales linearly and the search stops early when the area runs out",
-            sweep_results_per_point: "any value at or above the page size; multiplies the sweep's call count",
+            search_limit: "any positive integer, and 0 means read the point until the source runs dry",
+            sweep_area: "any area the API will take; a large one comes back in pieces, each with a `continue_from` for the next",
             detail: `Depth is uncapped by design. Past roughly ${DEEP_SEARCH_ADVISORY} results from a single center, a sweep usually returns more for the same spend, because depth re-reads one center while a sweep reads new ground.`,
           },
-          concurrency: {
-            sweep_points_in_parallel: ctx.cfg.sweepConcurrency,
-            requests_per_deep_point: SWEEP_CLIENT_BATCH,
-            outbound_budget: SWEEP_OUTBOUND_BUDGET,
+          completeness: {
+            results_complete:
+              "On search, sweep and find_nearest. False means the source still had more to give, so `total` is a floor - read it as 'at least this many'. Absent means the API did not say, which is not the same as true.",
+            area_fully_swept:
+              "Sweep only, and a different question: whether every vantage point was visited, not whether each one was read to the end. False comes with `continue_from`.",
             detail:
-              "Points in flight are divided down as results_per_point rises, so points × their own parallel requests stays within the budget. The upstream reaches its source from one address without proxy rotation; a wide simultaneous burst is the pattern most likely to be throttled.",
+              "These two fail independently and are fixed by different parameters - pages_per_point for the first, continue_from for the second. A response can be short on either, both, or neither.",
           },
           response_size: {
             character_limit: 25_000,

@@ -69,32 +69,43 @@ than an error, because nothing about the response looks wrong.
 
 ## Knowing when you are done
 
-Two fields exist so that "there is nothing more" is something you are told
-rather than something you assume:
+"There is nothing more" is something you are told, never something you infer
+from the length of a list — and it arrives as **two independent fields** that
+fail for different reasons and take different fixes.
 
-- \`source_exhausted: true\` on a search — the source returned fewer places
-  than were asked for. Nothing more exists for that query and that center.
-- \`source_exhausted: false\` — the depth you asked for was filled. More may
-  exist. Raise \`limit\`, or switch to a sweep if the question was regional.
+| Field | \`false\` means | Fix |
+|---|---|---|
+| \`results_complete\` | the points that were read still had more to give; \`total\` is a floor | \`pages_per_point\` (≤15) on a sweep, \`limit: 0\` on a search, \`candidate_limit\` on find_nearest |
+| \`area_fully_swept\` | the sweep ran out of time with ground never visited | pass \`continue_from\` back and merge |
 
-A sweep reports \`stats.unique_results\` against \`stats.raw_results\`: the gap
-between them is what de-duplication removed, and it is the fastest signal that
-tiles are overlapping the way they should.
+A response can be short on either, both, or neither. A default sweep of Zamalek
+returns 100 pharmacies with \`area_fully_swept: true\` and
+\`results_complete: false\`; drained, the number is 218.
+
+**An absent field means the API did not say, which is not \`true\`.**
+
+\`has_more\` is a third thing and not a completeness signal: it means places
+already found and not yet shown. Paging with \`offset\` is free — it is served
+from the answer already in hand.
 
 ## Cost, in one line each
 
 | Tool | Upstream requests |
 |---|---|
 | \`geolink_geocode\`, \`geolink_reverse_geocode\` | 1, cached 10 min |
-| \`geolink_search_places\` | \`ceil((limit + offset) / ${UPSTREAM_PAGE_SIZE})\`, fewer if the area runs out |
+| \`geolink_search_places\` | 1, whatever the depth |
 | \`geolink_get_directions\` | 1 (+1 per endpoint given as a name) |
 | \`geolink_distance_matrix\` | 1, whatever the grid size (+1 per named location) |
-| \`geolink_find_nearest\` | 1 matrix + the search, in discovery mode |
-| \`geolink_sweep_area\` | \`grid_points × ceil(results_per_point / ${UPSTREAM_PAGE_SIZE})\` |
+| \`geolink_find_nearest\` | 1 in search mode; 1 matrix + geocodes with a list |
+| \`geolink_sweep_area\` | 1 per call; \`dry_run\` says how many the area needs |
 
-Names cost a geocode; coordinates cost nothing. Passing coordinates you already
-have is the cheapest optimisation available, and repeated names inside one
-session are cached anyway.
+The paging, the grid and the road-ranking all happen server-side now, which is
+why most of that column is 1. Names given to the place tools cost nothing — the
+API resolves them and tells you what it picked in \`resolved_to\`, which you
+should read, because names collide.
+
+Paging is free: whole search and sweep answers are cached, so \`offset\` never
+costs a second call.
 
 Read \`geolink://scale\` for measured latency and the reliability model,
 \`geolink://playbook/coverage\` for how to cover an area without leaving holes,

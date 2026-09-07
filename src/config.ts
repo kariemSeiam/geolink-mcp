@@ -3,8 +3,6 @@ import {
   DEFAULT_COUNTRY,
   DEFAULT_LANGUAGE,
   DEFAULT_MAX_MATRIX_CELLS,
-  DEFAULT_SWEEP_CONCURRENCY,
-  DEFAULT_SWEEP_MAX_POINTS,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_X_KEY,
 } from "./constants.js";
@@ -20,8 +18,6 @@ export interface Config {
   defaultCountry: string;
   timeoutMs: number;
   maxMatrixCells: number;
-  sweepMaxPoints: number;
-  sweepConcurrency: number;
   transport: Transport;
   host: string;
   port: number;
@@ -85,8 +81,6 @@ export function loadConfig(): Config {
     // is what lets those same tools reach the newer surface on their behalf.
     xKey: strEnv("GEOLINK_X_KEY", DEFAULT_X_KEY),
     maxMatrixCells: intEnv("GEOLINK_MAX_MATRIX_CELLS", DEFAULT_MAX_MATRIX_CELLS, 1, 2_500),
-    sweepMaxPoints: intEnv("GEOLINK_SWEEP_MAX_POINTS", DEFAULT_SWEEP_MAX_POINTS, 1, 5_000),
-    sweepConcurrency: intEnv("GEOLINK_SWEEP_CONCURRENCY", DEFAULT_SWEEP_CONCURRENCY, 1, 32),
     transport: transportRaw,
     host: strEnv("HOST", "127.0.0.1"),
     port: intEnv("PORT", 3000, 1, 65_535),
