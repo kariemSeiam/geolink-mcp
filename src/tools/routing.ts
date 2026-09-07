@@ -242,7 +242,7 @@ Examples:
   server.registerTool(
     "geolink_distance_matrix",
     {
-      title: "Distance matrix",
+      title: "Travel times between many points",
       description: `Travel distance and duration for every origin × destination pair in ONE API call, plus GeoLink's precomputed nearest destination per origin. Inputs accept coordinates or place names.
 
 Guard rail: origins × destinations must be ≤ ${ctx.cfg.maxMatrixCells} cells (configurable via GEOLINK_MAX_MATRIX_CELLS). Larger jobs should be batched.

@@ -87,7 +87,7 @@ export function registerSearchTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     "geolink_search_places",
     {
-      title: "Search places",
+      title: "Find places near one point",
       description: `Find places around one point. Each result carries its name, address, structured address parts (district, governorate, country), coordinates, category, type and timezone, plus — when the place has one — a rating with the count it rests on, a phone number, a website, a photo and today's opening hours.
 
 An absent field means the place genuinely has no such thing. Nothing is filled in with a zero or a placeholder to hide a gap, and a rating never travels without its count.

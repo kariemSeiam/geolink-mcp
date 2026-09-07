@@ -183,7 +183,7 @@ export function registerSweepTool(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     "geolink_sweep_area",
     {
-      title: "Sweep an area for places",
+      title: "Find every place across an area",
       description: `Find every place matching a query across a whole area — a governorate, city, district, radius, or bounding box — by searching it from several vantage points and merging what each one saw.
 
 One search reads one point as deeply as you like and still sees only what is near it: a large limit reads deeper, it does not read wider. This is the tool that reads wider. Use geolink_search_places when one neighbourhood is the question; use this one for "all pharmacies in Giza" or "every school within 10 km of Tanta".
